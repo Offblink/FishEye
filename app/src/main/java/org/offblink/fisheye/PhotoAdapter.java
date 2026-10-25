@@ -8,6 +8,7 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.widget.ImageView;
+import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
@@ -45,7 +46,7 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
     /** 只改选中态的局部刷新标记，避免重解缩略图 */
     private static final Object PAYLOAD_SELECTION = new Object();
 
-    private final List<Uri> items = new ArrayList<>();
+    private final List<AlbumStore.Item> items = new ArrayList<>();
     private final Set<Long> selected = new LinkedHashSet<>();
     private final ExecutorService thumbs = Executors.newFixedThreadPool(2);
     private Listener listener;
@@ -74,7 +75,7 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
         }
     }
 
-    void submit(List<Uri> data) {
+    void submit(List<AlbumStore.Item> data) {
         items.clear();
         items.addAll(data);
         selected.clear();
@@ -110,12 +111,22 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
 
     List<Uri> selectedUris() {
         List<Uri> out = new ArrayList<>();
-        for (Uri u : items) {
-            if (selected.contains(idOf(u))) {
-                out.add(u);
+        for (AlbumStore.Item it : items) {
+            if (selected.contains(idOf(it.uri))) {
+                out.add(it.uri);
             }
         }
         return out;
+    }
+
+    /** 这一格是不是录像：点开时决定是进预览还是交给系统播放器 */
+    boolean isVideo(Uri uri) {
+        for (AlbumStore.Item it : items) {
+            if (it.uri.equals(uri)) {
+                return it.video;
+            }
+        }
+        return false;
     }
 
     void shutdown() {
@@ -128,7 +139,7 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
 
     private int indexOf(long id) {
         for (int i = 0; i < items.size(); i++) {
-            if (idOf(items.get(i)) == id) {
+            if (idOf(items.get(i).uri) == id) {
                 return i;
             }
         }
@@ -146,7 +157,8 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
 
     @Override
     public void onBindViewHolder(@NonNull VH holder, int position) {
-        final Uri uri = items.get(position);
+        final AlbumStore.Item item = items.get(position);
+        final Uri uri = item.uri;
         final long id = idOf(uri);
         holder.photoId = id;
         holder.ring.setVisibility(selected.contains(id) ? View.VISIBLE : View.GONE);
@@ -155,7 +167,15 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
         lp.height = holder.itemView.getResources().getDisplayMetrics().widthPixels / 3;
         holder.image.setLayoutParams(lp);
 
-        Bitmap cached = AlbumStore.cachedThumb(uri, lp.height);
+        // 录像：右下角一枚时长角标，一眼分得清是照片还是片子
+        if (item.video) {
+            holder.duration.setVisibility(View.VISIBLE);
+            holder.duration.setText("\u25B6 " + duration(item.durationMs));
+        } else {
+            holder.duration.setVisibility(View.GONE);
+        }
+
+        Bitmap cached = AlbumStore.cachedThumb(item, lp.height);
         if (cached != null) {
             holder.image.setTag(id);
             holder.image.setImageBitmap(cached);
@@ -163,8 +183,7 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
             holder.image.setImageDrawable(null);
             holder.image.setTag(id);
             thumbs.execute(() -> {
-                Bitmap bmp = AlbumStore.thumbnail(holder.image.getContext().getContentResolver(),
-                        uri, lp.height);
+                Bitmap bmp = AlbumStore.thumbnail(holder.image.getContext(), item, lp.height);
                 holder.image.post(() -> {
                     Object tag = holder.image.getTag();
                     if (tag instanceof Long && (Long) tag == id && bmp != null) {
@@ -194,7 +213,7 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
                                  @NonNull List<Object> payloads) {
         if (!payloads.isEmpty()) {
             // 只是选中态变了：画个圈就完事，别把缩略图重新解一遍
-            Uri uri = items.get(position);
+            Uri uri = items.get(position).uri;
             holder.photoId = idOf(uri);
             holder.ring.setVisibility(selected.contains(holder.photoId)
                     ? View.VISIBLE : View.GONE);
@@ -301,7 +320,7 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
         int hi = Math.max(anchorPos, curPos);
         boolean changed = false;
         for (int p = lo; p <= hi; p++) {
-            long cid = idOf(items.get(p));
+            long cid = idOf(items.get(p).uri);
             if (strokeApplied.contains(cid)) {
                 continue;
             }
@@ -342,12 +361,24 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
     static class VH extends RecyclerView.ViewHolder {
         final ImageView image;
         final View ring;
+        final TextView duration;
         long photoId;
 
         VH(@NonNull View itemView) {
             super(itemView);
             image = itemView.findViewById(R.id.item_image);
             ring = itemView.findViewById(R.id.item_ring);
+            duration = itemView.findViewById(R.id.item_dur);
         }
+    }
+
+    /** 0:07 / 1:03 / 12:00，超过一小时就别抻成两位了 */
+    static String duration(long ms) {
+        long s = Math.max(0, ms / 1000);
+        if (s >= 3600) {
+            return String.format(java.util.Locale.US, "%d:%02d:%02d",
+                    s / 3600, (s % 3600) / 60, s % 60);
+        }
+        return String.format(java.util.Locale.US, "%d:%02d", s / 60, s % 60);
     }
 }

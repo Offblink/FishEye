@@ -34,7 +34,7 @@ public class GalleryActivity extends AppCompatActivity {
     private PhotoAdapter adapter;
     private ExecutorService io;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final List<Uri> items = new ArrayList<>();
+    private final List<AlbumStore.Item> items = new ArrayList<>();
     private boolean selectionMode;
 
     @Override
@@ -63,6 +63,8 @@ public class GalleryActivity extends AppCompatActivity {
                 if (selectionMode) {
                     adapter.toggle(uri);
                     refreshChrome();
+                } else if (adapter.isVideo(uri)) {
+                    playVideo(uri);
                 } else {
                     openPreview(rect, uri);
                 }
@@ -137,7 +139,7 @@ public class GalleryActivity extends AppCompatActivity {
 
     private void reload() {
         io.execute(() -> {
-            final List<Uri> list = AlbumStore.list(this);
+            final List<AlbumStore.Item> list = AlbumStore.list(this);
             main.post(() -> {
                 items.clear();
                 items.addAll(list);
@@ -161,14 +163,14 @@ public class GalleryActivity extends AppCompatActivity {
                 selectionMode = false;
                 adapter.setPaintEnabled(false);
             } else {
-                title.setText("已选 " + n + " 张");
+                title.setText("已选 " + n + " 项");
                 action.setText("删除");
                 action.setTextColor(getColor(R.color.accent));
                 return;
             }
         }
         title.setText("PICTURES / FISHEYE");
-        action.setText(items.size() + " 张");
+        action.setText(items.size() + " 项");
         action.setTextColor(getColor(R.color.fg_dim));
     }
 
@@ -189,12 +191,24 @@ public class GalleryActivity extends AppCompatActivity {
         });
     }
 
+    /** 录像不自己做播放器：交给系统里能放 mp4 的播放器，进来还是这部片子 */
+    private void playVideo(Uri uri) {
+        Intent view = new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "video/mp4")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivity(view);
+        } catch (android.content.ActivityNotFoundException e) {
+            Ui.toast(this, "这台设备没有能放视频的应用");
+        }
+    }
+
     private void confirmDelete() {
         final List<Uri> targets = adapter.selectedUris();
         if (targets.isEmpty()) {
             return;
         }
-        Ui.confirm(this, "删除 " + targets.size() + " 张照片？", "删掉就找不回来了。",
+        Ui.confirm(this, "删除 " + targets.size() + " 项？", "删掉就找不回来了。",
                 "删除", Color.parseColor("#FFFF6B6B"), () -> io.execute(() -> {
                     for (Uri u : targets) {
                         AlbumStore.delete(this, u);

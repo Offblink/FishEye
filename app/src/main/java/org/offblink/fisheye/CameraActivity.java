@@ -1,6 +1,7 @@
 package org.offblink.fisheye;
 
 import android.Manifest;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -12,6 +13,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.view.MotionEvent;
 import android.view.View;
 import android.webkit.JavascriptInterface;
@@ -25,13 +27,26 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.Camera;
+import androidx.camera.core.CameraEffect;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.FocusMeteringAction;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.MeteringPoint;
 import androidx.camera.core.Preview;
+import androidx.camera.core.UseCaseGroup;
+import androidx.camera.core.resolutionselector.AspectRatioStrategy;
+import androidx.camera.core.resolutionselector.ResolutionSelector;
 import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.video.FallbackStrategy;
+import androidx.camera.video.MediaStoreOutputOptions;
+import androidx.camera.video.PendingRecording;
+import androidx.camera.video.Quality;
+import androidx.camera.video.QualitySelector;
+import androidx.camera.video.Recorder;
+import androidx.camera.video.Recording;
+import androidx.camera.video.VideoCapture;
+import androidx.camera.video.VideoRecordEvent;
 import androidx.core.content.ContextCompat;
 import androidx.core.view.WindowCompat;
 import androidx.exifinterface.media.ExifInterface;
@@ -40,15 +55,18 @@ import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 拍摄模式：取景 + 实时张力管线 + 快门。
+ * 拍摄模式：取景 + 实时张力管线 + 快门 / 录像。
  *
  * <p>和其他相机 App 不一样的地方只有一处：画面上来不是直出，而是先过
  * {@link GlPreviewView} 的两趟 shader。快门按下时，同一张照片被交给同一套 shader
  * 重新渲染一遍再存盘——所以「取景时看到的样子」和「存下来的照片」是同一件事。
+ * 录像同理：{@link VideoProcessor} 作为 CameraX 的 SurfaceProcessor 插在相机与编码器之间，
+ * 用的还是同一份 GLSL。
  */
 public class CameraActivity extends AppCompatActivity {
 
@@ -56,12 +74,36 @@ public class CameraActivity extends AppCompatActivity {
     private WebView controls;
     private ImageView thumb;
     private View shutter;
+    private View shutterDisc;
     private View flash;
     private View permGate;
     private TextView title;
     private TextView flipLabel;
     private CameraSelector selector = CameraSelector.DEFAULT_BACK_CAMERA;
     private View thumbWrap;
+
+    // 录像
+    private TextView modePhoto;
+    private TextView modeVideo;
+    private View recBar;
+    private TextView recTime;
+    private VideoProcessor videoProcessor;
+    private CameraEffect videoEffect;
+    private VideoCapture<Recorder> videoCapture;
+    private Recording recording;
+    private boolean videoMode;
+    private long recordStartedAt;
+    private final Runnable recTick = new Runnable() {
+        @Override
+        public void run() {
+            if (recording == null) {
+                return;
+            }
+            long s = (System.currentTimeMillis() - recordStartedAt) / 1000;
+            recTime.setText(String.format(java.util.Locale.US, "%02d:%02d", s / 60, s % 60));
+            main.postDelayed(this, 500);
+        }
+    };
 
     private ProcessCameraProvider provider;
     private Camera camera;
@@ -96,6 +138,7 @@ public class CameraActivity extends AppCompatActivity {
         thumb = findViewById(R.id.cam_thumb);
         thumbWrap = findViewById(R.id.cam_thumb_wrap);
         shutter = findViewById(R.id.cam_shutter);
+        shutterDisc = findViewById(R.id.cam_shutter_disc);
         flash = findViewById(R.id.cam_flash);
         permGate = findViewById(R.id.cam_perm);
         title = findViewById(R.id.cam_title);
@@ -112,7 +155,16 @@ public class CameraActivity extends AppCompatActivity {
         });
 
         // 点击挂在整块上：中间那块白盘会先接到触摸，只给环设监听的话点正中会没反应
-        findViewById(R.id.cam_shutter_wrap).setOnClickListener(v -> takePhoto());
+        findViewById(R.id.cam_shutter_wrap).setOnClickListener(v -> onShutter());
+        modePhoto = findViewById(R.id.cam_mode_photo);
+        modeVideo = findViewById(R.id.cam_mode_video);
+        recBar = findViewById(R.id.cam_rec);
+        recTime = findViewById(R.id.cam_rec_time);
+        modePhoto.setOnClickListener(v -> setVideoMode(false));
+        modeVideo.setOnClickListener(v -> setVideoMode(true));
+        videoProcessor = new VideoProcessor();
+        videoProcessor.setErrorListener(msg -> runOnUiThread(() -> Ui.toast(this, msg)));
+        videoProcessor.setParams(params);
         flipLabel.setOnClickListener(v -> flipCamera());
         // 左下缩略图就是相册入口（不再在右下放第二个「相册」）
         thumbWrap.setOnClickListener(v -> startActivity(new Intent(this, GalleryActivity.class)));
@@ -143,10 +195,22 @@ public class CameraActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        // 离开拍摄页就别继续录了：录出来的东西是黑屏/没人管的残片
+        if (recording != null) {
+            stopRecording();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
         if (io != null) {
             io.shutdown();
+        }
+        if (videoProcessor != null) {
+            videoProcessor.release();
         }
         if (provider != null) {
             provider.unbindAll();
@@ -154,10 +218,12 @@ public class CameraActivity extends AppCompatActivity {
     }
 
     private String[] requested() {
+        // 录音权限单独要：拒了也照样能录画面，只是没声音
         String[] storage = AlbumStore.storagePermissions();
-        String[] all = new String[storage.length + 1];
+        String[] all = new String[storage.length + 2];
         all[0] = Manifest.permission.CAMERA;
-        System.arraycopy(storage, 0, all, 1, storage.length);
+        all[1] = Manifest.permission.RECORD_AUDIO;
+        System.arraycopy(storage, 0, all, 2, storage.length);
         return all;
     }
 
@@ -223,6 +289,9 @@ public class CameraActivity extends AppCompatActivity {
             main.post(() -> {
                 params.set(key, value);
                 preview.setParams(params);
+                if (videoProcessor != null) {
+                    videoProcessor.setParams(params);
+                }
             });
         }
 
@@ -231,6 +300,9 @@ public class CameraActivity extends AppCompatActivity {
             main.post(() -> {
                 params.preset(name);
                 preview.setParams(params);
+                if (videoProcessor != null) {
+                    videoProcessor.setParams(params);
+                }
                 pushUi();
             });
         }
@@ -240,6 +312,9 @@ public class CameraActivity extends AppCompatActivity {
             main.post(() -> {
                 params.preset("default");
                 preview.setParams(params);
+                if (videoProcessor != null) {
+                    videoProcessor.setParams(params);
+                }
                 pushUi();
             });
         }
@@ -291,7 +366,15 @@ public class CameraActivity extends AppCompatActivity {
         if (provider == null) {
             return;
         }
-        Preview viewfinder = new Preview.Builder().build();
+        // 取景流的画面比例跟着模式走：拍照 4:3 与成片一致，录像 16:9 与编码一致
+        ResolutionSelector ratio = new ResolutionSelector.Builder()
+                .setAspectRatioStrategy(videoMode
+                        ? AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
+                        : AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                .build();
+        Preview viewfinder = new Preview.Builder()
+                .setResolutionSelector(ratio)
+                .build();
         viewfinder.setSurfaceProvider(preview);
         if (imageCapture == null) {
             imageCapture = new ImageCapture.Builder()
@@ -299,12 +382,45 @@ public class CameraActivity extends AppCompatActivity {
                     .setJpegQuality(95)
                     .build();
         }
+        if (videoCapture == null) {
+            Recorder recorder = new Recorder.Builder()
+                    // 模拟器只给得出低分辨率；优先级写全，真机自动挑得到的最高的
+                    .setQualitySelector(QualitySelector.fromOrderedList(
+                            Arrays.asList(Quality.FHD, Quality.HD, Quality.SD),
+                            FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)))
+                    .build();
+            videoCapture = VideoCapture.withOutput(recorder);
+        }
+        if (videoEffect == null) {
+            // 只挂在 VideoCapture 上：取景那条链路一点都不动，画面靠同一份 GLSL 保持一致
+            videoEffect = new CameraEffect(CameraEffect.VIDEO_CAPTURE,
+                    videoProcessor.executor(), videoProcessor,
+                    throwable -> runOnUiThread(() ->
+                            Ui.toast(this, "录像管线出错：" + throwable.getMessage()))) {
+            };
+        }
+        UseCaseGroup group = new UseCaseGroup.Builder()
+                .addUseCase(viewfinder)
+                .addUseCase(imageCapture)
+                .addUseCase(videoCapture)
+                .addEffect(videoEffect)
+                .build();
         provider.unbindAll();
-        camera = provider.bindToLifecycle(this, selector, viewfinder, imageCapture);
+        try {
+            camera = provider.bindToLifecycle(this, selector, group);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            // 某些机型不支持「预览 + 拍照 + 录像」三路并发：退回到不录像的组合，
+            // 至少拍照还能用，并且把原因说出来（静默降级比崩溃好）
+            android.util.Log.e("FishEye", "bind with video failed", e);
+            modeVideo.setVisibility(View.GONE);
+            setVideoMode(false, false);
+            camera = provider.bindToLifecycle(this, selector, viewfinder, imageCapture);
+            Ui.toast(this, "这台设备不支持同时录像，只能用拍照：" + e.getClass().getSimpleName());
+        }
     }
 
     private void flipCamera() {
-        if (capturing || provider == null) {
+        if (capturing || recording != null || provider == null) {
             return;
         }
         selector = selector == CameraSelector.DEFAULT_BACK_CAMERA
@@ -312,6 +428,7 @@ public class CameraActivity extends AppCompatActivity {
                 : CameraSelector.DEFAULT_BACK_CAMERA;
         bindCamera();
         preview.setFocus(0.5f, 0.5f);
+        videoProcessor.setFocus(0.5f, 0.5f);
     }
 
     /** 点取景任意位置：那里对焦测光，同时把缩放模糊的中心挪过去 */
@@ -323,6 +440,7 @@ public class CameraActivity extends AppCompatActivity {
             float nx = event.getX() / Math.max(1, v.getWidth());
             float ny = event.getY() / Math.max(1, v.getHeight());
             preview.setFocus(nx, 1f - ny);
+            videoProcessor.setFocus(nx, 1f - ny);
             if (camera != null) {
                 MeteringPoint point = new androidx.camera.core.SurfaceOrientedMeteringPointFactory(
                         Math.max(1, v.getWidth()), Math.max(1, v.getHeight()))
@@ -350,7 +468,7 @@ public class CameraActivity extends AppCompatActivity {
     // --------------------------------------------------------------- 快门
 
     private void takePhoto() {
-        if (capturing || imageCapture == null) {
+        if (capturing || imageCapture == null || recording != null) {
             return;
         }
         capturing = true;
@@ -440,6 +558,130 @@ public class CameraActivity extends AppCompatActivity {
         });
     }
 
+    // --------------------------------------------------------------- 录像
+
+    private void onShutter() {
+        if (videoMode) {
+            if (recording == null) {
+                startRecording();
+            } else {
+                stopRecording();
+            }
+        } else {
+            takePhoto();
+        }
+    }
+
+    private void setVideoMode(boolean on) {
+        setVideoMode(on, true);
+    }
+
+    /**
+     * @param rebind 换模式要按新的画面比例重绑：取景是 4:3（跟照片一致），
+     *               录像是 16:9（视频能力里只有 16:9），不重绑就会出现
+     *               「录下来的比取景框里看到的多一截」。重绑由调用方决定，
+     *               免得绑定失败的兜底路径又绕回来。
+     */
+    private void setVideoMode(boolean on, boolean rebind) {
+        if (videoMode == on) {
+            return;
+        }
+        if (recording != null) {
+            // 换模式先把当前这段收尾，免得录到一半状态打架
+            stopRecording();
+        }
+        videoMode = on;
+        modePhoto.setBackground(on ? null : getDrawable(R.drawable.mode_on));
+        modeVideo.setBackground(on ? getDrawable(R.drawable.mode_on) : null);
+        modePhoto.setTextColor(getColor(on ? R.color.fg_dim : R.color.fg));
+        modeVideo.setTextColor(getColor(on ? R.color.fg : R.color.fg_dim));
+        if (rebind && provider != null && !capturing) {
+            bindCamera();
+        }
+    }
+
+    private void startRecording() {
+        if (videoCapture == null || recording != null || isFinishing()) {
+            return;
+        }
+        String name = "FishEye_" + System.currentTimeMillis() + ".mp4";
+        MediaStoreOutputOptions output = new MediaStoreOutputOptions.Builder(
+                getContentResolver(), AlbumStore.videoCollection())
+                .setContentValues(AlbumStore.videoValues(name))
+                .build();
+        PendingRecording pending = videoCapture.getOutput().prepareRecording(this, output);
+        boolean audio = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
+        if (audio) {
+            pending = pending.withAudioEnabled();
+        } else {
+            Ui.toast(this, "没有录音权限，这段只录画面");
+        }
+        try {
+            recording = pending.start(ContextCompat.getMainExecutor(this), this::onRecordEvent);
+        } catch (Throwable t) {
+            recording = null;
+            Ui.toast(this, "开始录像失败：" + t.getMessage());
+            return;
+        }
+        try {
+            new MediaActionSound().play(MediaActionSound.START_VIDEO_RECORDING);
+        } catch (Throwable ignored) {
+        }
+        recordStartedAt = System.currentTimeMillis();
+        recTime.setText("00:00");
+        recBar.setVisibility(View.VISIBLE);
+        recBar.setAlpha(0f);
+        recBar.animate().alpha(1f).setDuration(160).start();
+        shutterDisc.setBackgroundResource(R.drawable.shutter_rec);
+        main.removeCallbacks(recTick);
+        main.postDelayed(recTick, 400);
+    }
+
+    private void stopRecording() {
+        Recording r = recording;
+        if (r == null) {
+            return;
+        }
+        android.util.Log.d("FishEye", "stop recording: processor frames="
+                + (videoProcessor == null ? -1 : videoProcessor.frames()));
+        // recording 要等 Finalize 回来才置空：中途再点快门不能又开一段
+        try {
+            r.stop();
+        } catch (Throwable t) {
+            recording = null;
+            restoreRecordUi();
+        }
+        restoreRecordUi();
+    }
+
+    private void onRecordEvent(VideoRecordEvent event) {
+        if (event instanceof VideoRecordEvent.Finalize) {
+            VideoRecordEvent.Finalize f = (VideoRecordEvent.Finalize) event;
+            recording = null;
+            restoreRecordUi();
+            Uri out = f.getOutputResults().getOutputUri();
+            if (f.hasError()) {
+                android.util.Log.e("FishEye", "record finalize error " + f.getError(), f.getCause());
+                // 出错时 MediaStore 里可能留了个空条目，删掉免得相册里多一张打不开的
+                if (out != null) {
+                    AlbumStore.delete(this, out);
+                }
+                Ui.toast(this, "录像失败（" + f.getError() + "）");
+            } else {
+                AlbumStore.videoFinalize(this, out);
+                refreshThumb();
+            }
+        }
+    }
+
+    private void restoreRecordUi() {
+        main.removeCallbacks(recTick);
+        recBar.animate().alpha(0f).setDuration(160)
+                .withEndAction(() -> recBar.setVisibility(View.GONE)).start();
+        shutterDisc.setBackgroundResource(R.drawable.shutter_disc);
+    }
+
     /** 按 EXIF 角度把位图转正 */
     static Bitmap rotate(Bitmap src, int deg) {
         if (deg == 0) {
@@ -499,8 +741,8 @@ public class CameraActivity extends AppCompatActivity {
 
     private void refreshThumb() {
         io.execute(() -> {
-            Uri uri = AlbumStore.latest(this);
-            Bitmap bmp = uri == null ? null : AlbumStore.thumbnail(getContentResolver(), uri, 160);
+            AlbumStore.Item item = AlbumStore.latest(this);
+            Bitmap bmp = item == null ? null : AlbumStore.thumbnail(this, item, 160);
             main.post(() -> {
                 if (bmp != null) {
                     thumb.setImageBitmap(bmp);

@@ -44,6 +44,8 @@ dependencies {
     implementation libs.camera.core
     implementation libs.camera.camera2
     implementation libs.camera.lifecycle
+    // 录像：Recorder 负责编码/封装/录音，画面由我们自己的 SurfaceProcessor 接管
+    implementation libs.camera.video
     // 存图/回显时按 EXIF 方向摆正照片
     implementation libs.exifinterface
 }

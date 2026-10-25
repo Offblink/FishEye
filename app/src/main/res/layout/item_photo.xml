@@ -12,6 +12,22 @@
         android:contentDescription="@string/app_name"
         android:scaleType="fitCenter" />
 
+    <!-- 录像角标：播放符号 + 时长，只有片子才显示 -->
+    <TextView
+        android:id="@+id/item_dur"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="6dp"
+        android:background="@drawable/dur_pill"
+        android:paddingStart="6dp"
+        android:paddingTop="2dp"
+        android:paddingEnd="6dp"
+        android:paddingBottom="2dp"
+        android:textColor="#FFFFFFFF"
+        android:textSize="10sp"
+        android:visibility="gone" />
+
     <!-- 选中态：圈 + 压暗，只改这一层的可见性 -->
     <View
         android:id="@+id/item_ring"

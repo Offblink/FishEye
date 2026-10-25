@@ -27,10 +27,6 @@ import androidx.camera.core.Preview;
 import androidx.camera.core.SurfaceRequest;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.FloatBuffer;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -59,10 +55,6 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         void onGlError(String message);
     }
 
-    private static final float[] QUAD = {
-            -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
-    };
-
     private final HandlerThread thread = new HandlerThread("fisheye-gl");
     private Handler gl;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -82,20 +74,12 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
     private EGLConfig eglCfg;
     private EGLSurface eglSrf = EGL14.EGL_NO_SURFACE;
     private boolean glInit;
-    private boolean programsReady;
-
-    private Program progExt;
-    private Program prog2d;
-    private Program progPost;
     /** 预览缓冲相对视图的缩放：慢设备上会自动降级 */
     private float previewScale = 1f;
     private long frameAccMs;
     private int frameAccN;
-    private int vao;
-    private int vbo;
-    private int fbo1 = -1, tex1 = -1;
+    /** 量亮度用的 16×16 离屏目标 */
     private int fbo2 = -1, tex2 = -1;
-    private int fbW, fbH;
 
     private int surfaceW, surfaceH;
 
@@ -109,7 +93,9 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
     private final float[] stMatrix = new float[16];
     private final float[] stMat3 = new float[9];
     private boolean loggedSt;
-    private static final float[] IDENTITY3 = {1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f};
+    private static final float[] IDENTITY3 = TensionRenderer.IDENTITY3;
+    /** 取景这一路的 GL 程序与中间 FBO（每个 EGL 上下文各一份） */
+    private final TensionRenderer renderer = new TensionRenderer();
     private final AtomicBoolean frameQueued = new AtomicBoolean(false);
     private volatile boolean camBound;
 
@@ -227,7 +213,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
 
     private void consumeRequest() {
         SurfaceRequest req = pendingRequest;
-        if (req == null || !programsReady) {
+        if (req == null || !renderer.ready()) {
             return;
         }
         pendingRequest = null;
@@ -345,27 +331,11 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         if (!EGL14.eglMakeCurrent(eglDpy, eglSrf, eglSrf, eglCtx)) {
             return;
         }
-        if (!programsReady) {
-            progExt = Program.build(Shaders.VERTEX, Shaders.MAIN_EXTERNAL);
-            prog2d = Program.build(Shaders.VERTEX, Shaders.MAIN_2D);
-            progPost = Program.build(Shaders.VERTEX, Shaders.POST);
-            if (progExt == null || prog2d == null || progPost == null) {
-                fail("着色器编译失败：" + Program.lastError);
+        if (!renderer.ready()) {
+            if (!renderer.init()) {
+                fail("着色器编译失败：" + TensionRenderer.Program.lastError);
                 return;
             }
-            int[] vaoIds = new int[1];
-            GLES30.glGenVertexArrays(1, vaoIds, 0);
-            vao = vaoIds[0];
-            int[] vboIds = new int[1];
-            GLES30.glGenBuffers(1, vboIds, 0);
-            vbo = vboIds[0];
-            FloatBuffer buf = ByteBuffer.allocateDirect(QUAD.length * 4)
-                    .order(ByteOrder.nativeOrder()).asFloatBuffer();
-            buf.put(QUAD).position(0);
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo);
-            GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, QUAD.length * 4, buf, GLES30.GL_STATIC_DRAW);
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0);
-            programsReady = true;
             ensureCameraTexture();
         }
         consumeRequest();
@@ -406,7 +376,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
 
     private void drawCamera() {
         frameQueued.set(false);
-        if (!programsReady || camTex == null || eglSrf == EGL14.EGL_NO_SURFACE) {
+        if (!renderer.ready() || camTex == null || eglSrf == EGL14.EGL_NO_SURFACE) {
             return;
         }
         if (!EGL14.eglMakeCurrent(eglDpy, eglSrf, eglSrf, eglCtx)) {
@@ -437,10 +407,12 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         stMat3[7] = stMatrix[13];
         stMat3[8] = 1f;
         smooth.approach(target, 0.22f);
-        ensureFbo(surfaceW, surfaceH);
         int rw = (camRotDeg % 180 == 0) ? srcW : srcH;
         int rh = (camRotDeg % 180 == 0) ? srcH : srcW;
-        render(progExt, extId, true, 1f / srcW, 1f / srcH, 0f, rw, rh);
+        renderer.render(extId, true, stMat3, 1f / srcW, 1f / srcH, 0f, 0f, rw, rh,
+                smooth, focusX, focusY, (System.nanoTime() % 1000000000L) / 1e6f,
+                surfaceW, surfaceH, 0, surfaceW, surfaceH);
+        sampleLumaIfDue(surfaceW, surfaceH);
         EGL14.eglSwapBuffers(eglDpy, eglSrf);
         framesDrawn++;
         adaptResolution(SystemClock.uptimeMillis() - startMs);
@@ -476,77 +448,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         }
     }
 
-    /**
-     * 一趟完整管线：主 shader 渲进 fbo1，第二 pass 渲到当前 target（窗口或 fbo2）。
-     *
-     * @param external 源是不是相机外部纹理
-     * @param rot      采样坐标旋转（弧度）
-     * @param srcAw    摆正后的源宽（算 cover 用）
-     */
-    private void render(Program main, int tex, boolean external, float texelX, float texelY,
-                        float rot, int srcAw, int srcAh) {
-        int outW = (fbo1 >= 0) ? fbW : surfaceW;
-        int outH = (fbo1 >= 0) ? fbH : surfaceH;
-
-        float targetAspect = outW / (float) Math.max(1, outH);
-        float srcAspect = srcAw / (float) Math.max(1, srcAh);
-        float sx = 1f, sy = 1f;
-        if (srcAspect > targetAspect) {
-            sx = targetAspect / srcAspect;
-        } else {
-            sy = srcAspect / targetAspect;
-        }
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo1);
-        GLES30.glViewport(0, 0, outW, outH);
-        GLES30.glUseProgram(main.id);
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
-        GLES30.glBindTexture(external ? GLES11Ext.GL_TEXTURE_EXTERNAL_OES : GLES30.GL_TEXTURE_2D, tex);
-        GLES30.glUniform1i(main.loc("uTex"), 0);
-        GLES30.glUniform2f(main.loc("uScale"), sx, sy);
-        GLES30.glUniform1f(main.loc("uRot"), rot);
-        GLES30.glUniform1f(main.loc("uFlipY"), 0f);
-        GLES30.glUniform1f(main.loc("uAspect"), targetAspect);
-        GLES30.glUniform1f(main.loc("uFish"), smooth.fisheye);
-        GLES30.glUniform1f(main.loc("uChroma"), smooth.chroma);
-        GLES30.glUniform1f(main.loc("uExposure"), smooth.exposure);
-        GLES30.glUniform1f(main.loc("uContrast"), smooth.contrast);
-        GLES30.glUniform1f(main.loc("uSaturation"), smooth.saturation);
-        GLES30.glUniform1f(main.loc("uLocal"), smooth.local);
-        GLES30.glUniform2f(main.loc("uTexel"), texelX, texelY);
-        GLES30.glUniformMatrix3fv(main.loc("uSt"), 1, false, stMat3, 0);
-        drawQuad(main);
-
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
-        GLES30.glViewport(0, 0, surfaceW, surfaceH);
-        GLES30.glUseProgram(progPost.id);
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex1);
-        GLES30.glUniform1i(progPost.loc("uTex"), 0);
-        GLES30.glUniform2f(progPost.loc("uResolution"), outW, outH);
-        GLES30.glUniform2f(progPost.loc("uFocus"), focusX, focusY);
-        GLES30.glUniform1f(progPost.loc("uBlur"), smooth.blur);
-        GLES30.glUniform1f(progPost.loc("uVignette"), smooth.vignette);
-        GLES30.glUniform1f(progPost.loc("uGrain"), smooth.grain);
-        GLES30.glUniform1f(progPost.loc("uTime"), (System.nanoTime() % 1000000000L) / 1e6f);
-        drawQuad(progPost);
-
-        sampleLumaIfDue(outW, outH);
-    }
-
-    private void drawQuad(Program p) {
-        GLES30.glBindVertexArray(vao);
-        int pos = p.attrib("aPos");
-        if (pos >= 0) {
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo);
-            GLES30.glEnableVertexAttribArray(pos);
-            GLES30.glVertexAttribPointer(pos, 2, GLES30.GL_FLOAT, false, 0, 0);
-        }
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4);
-        GLES30.glBindVertexArray(0);
-    }
-
-    /** 每 500ms 从 tex1 采一张 16×16，算屏幕上真实亮度，交给界面反色 */
+    /** 每 500ms 从内部纹理采一张 16×16，算屏幕上真实亮度，交给界面反色 */
     private void sampleLumaIfDue(int outW, int outH) {
         long now = System.currentTimeMillis();
         LumaListener l = lumaListener;
@@ -570,19 +472,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
             GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
                     GLES30.GL_TEXTURE_2D, tex2, 0);
         }
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo2);
-        GLES30.glViewport(0, 0, 16, 16);
-        GLES30.glUseProgram(progPost.id);
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex1);
-        GLES30.glUniform1i(progPost.loc("uTex"), 0);
-        GLES30.glUniform2f(progPost.loc("uResolution"), outW, outH);
-        GLES30.glUniform2f(progPost.loc("uFocus"), 0.5f, 0.5f);
-        GLES30.glUniform1f(progPost.loc("uBlur"), 0f);
-        GLES30.glUniform1f(progPost.loc("uVignette"), 0f);
-        GLES30.glUniform1f(progPost.loc("uGrain"), 0f);
-        GLES30.glUniform1f(progPost.loc("uTime"), 0f);
-        drawQuad(progPost);
+        renderer.postLuma(renderer.internalTex(), fbo2, outW, outH);
 
         ByteBuffer px = ByteBuffer.allocateDirect(16 * 16 * 4);
         GLES30.glReadPixels(0, 0, 16, 16, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, px);
@@ -602,40 +492,6 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
                 + (b / (double) n) * 0.0722);
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
         l.onLuma(luma);
-    }
-
-    private void ensureFbo(int w, int h) {
-        if (w <= 0 || h <= 0) {
-            return;
-        }
-        if (fbo1 >= 0 && w == fbW && h == fbH) {
-            return;
-        }
-        if (fbo1 >= 0) {
-            GLES30.glDeleteFramebuffers(1, new int[]{fbo1}, 0);
-            GLES30.glDeleteTextures(1, new int[]{tex1}, 0);
-            fbo1 = -1;
-            tex1 = -1;
-        }
-        int[] f = new int[1];
-        int[] t = new int[1];
-        GLES30.glGenFramebuffers(1, f, 0);
-        GLES30.glGenTextures(1, t, 0);
-        fbo1 = f[0];
-        tex1 = t[0];
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex1);
-        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, w, h, 0,
-                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null);
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR);
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR);
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE);
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE);
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo1);
-        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D, tex1, 0);
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
-        fbW = w;
-        fbH = h;
     }
 
     // -------------------------------------------------------------- 静止图
@@ -683,8 +539,6 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         int rw = swap ? sh : sw;
         int rh = swap ? sw : sh;
 
-        ensureFbo(outW, outH);
-        int mainFbo = fbo1, mainTex = tex1;
         int[] f = new int[1];
         int[] t = new int[1];
         GLES30.glGenFramebuffers(1, f, 0);
@@ -696,44 +550,15 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR);
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR);
 
-        // pass 1
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, mainFbo);
-        GLES30.glViewport(0, 0, outW, outH);
-        GLES30.glUseProgram(prog2d.id);
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imgTex);
-        GLES30.glUniform1i(prog2d.loc("uTex"), 0);
-        GLES30.glUniform2f(prog2d.loc("uScale"), 1f, 1f);
-        GLES30.glUniform1f(prog2d.loc("uRot"), (float) Math.toRadians(rotationDeg));
-        GLES30.glUniform1f(prog2d.loc("uFlipY"), 1f);
-        GLES30.glUniform1f(prog2d.loc("uAspect"), outW / (float) outH);
-        GLES30.glUniform1f(prog2d.loc("uFish"), smooth.fisheye);
-        GLES30.glUniform1f(prog2d.loc("uChroma"), smooth.chroma);
-        GLES30.glUniform1f(prog2d.loc("uExposure"), smooth.exposure);
-        GLES30.glUniform1f(prog2d.loc("uContrast"), smooth.contrast);
-        GLES30.glUniform1f(prog2d.loc("uSaturation"), smooth.saturation);
-        GLES30.glUniform1f(prog2d.loc("uLocal"), smooth.local);
-        GLES30.glUniform2f(prog2d.loc("uTexel"), 1f / Math.max(1, rw), 1f / Math.max(1, rh));
-        // 成片这条是纯 2D 采样，朝向已在 CPU 侧摆正：矩阵必须是单位阵
-        GLES30.glUniformMatrix3fv(prog2d.loc("uSt"), 1, false, IDENTITY3, 0);
-        drawQuad(prog2d);
-
-        // pass 2
+        // 与取景、录像同一份实现：2D 纹理 + 单位矩阵，朝向已经在 CPU 侧摆正
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outFbo);
         GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
                 GLES30.GL_TEXTURE_2D, outTex, 0);
-        GLES30.glViewport(0, 0, outW, outH);
-        GLES30.glUseProgram(progPost.id);
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0);
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, mainTex);
-        GLES30.glUniform1i(progPost.loc("uTex"), 0);
-        GLES30.glUniform2f(progPost.loc("uResolution"), outW, outH);
-        GLES30.glUniform2f(progPost.loc("uFocus"), focusX, focusY);
-        GLES30.glUniform1f(progPost.loc("uBlur"), smooth.blur);
-        GLES30.glUniform1f(progPost.loc("uVignette"), smooth.vignette);
-        GLES30.glUniform1f(progPost.loc("uGrain"), smooth.grain);
-        GLES30.glUniform1f(progPost.loc("uTime"), 12345f);
-        drawQuad(progPost);
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
+        renderer.render(imgTex, false, IDENTITY3,
+                1f / Math.max(1, rw), 1f / Math.max(1, rh),
+                (float) Math.toRadians(rotationDeg), 1f, outW, outH,
+                smooth, focusX, focusY, 12345f, outW, outH, outFbo, outW, outH);
 
         // 回读并上下翻（GL 的行序是自下而上）
         ByteBuffer px = ByteBuffer.allocateDirect(outW * outH * 4);
@@ -758,69 +583,4 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         return out;
     }
 
-    /** 编译 + 建 uniform 位置表的小包装 */
-    static final class Program {
-        static volatile String lastError = "";
-        final int id;
-        private final Map<String, Integer> locs = new HashMap<>();
-        private final Map<String, Integer> attribs = new HashMap<>();
-
-        private Program(int id) {
-            this.id = id;
-        }
-
-        static Program build(String vs, String fs) {
-            int v = compile(GLES30.GL_VERTEX_SHADER, vs);
-            int f = compile(GLES30.GL_FRAGMENT_SHADER, fs);
-            if (v == 0 || f == 0) {
-                return null;
-            }
-            int p = GLES30.glCreateProgram();
-            GLES30.glAttachShader(p, v);
-            GLES30.glAttachShader(p, f);
-            GLES30.glLinkProgram(p);
-            int[] ok = new int[1];
-            GLES30.glGetProgramiv(p, GLES30.GL_LINK_STATUS, ok, 0);
-            GLES30.glDeleteShader(v);
-            GLES30.glDeleteShader(f);
-            if (ok[0] == 0) {
-                lastError = GLES30.glGetProgramInfoLog(p);
-                GLES30.glDeleteProgram(p);
-                return null;
-            }
-            return new Program(p);
-        }
-
-        int attrib(String name) {
-            Integer v = attribs.get(name);
-            if (v == null) {
-                v = GLES30.glGetAttribLocation(id, name);
-                attribs.put(name, v);
-            }
-            return v;
-        }
-
-        int loc(String name) {
-            Integer v = locs.get(name);
-            if (v == null) {
-                v = GLES30.glGetUniformLocation(id, name);
-                locs.put(name, v);
-            }
-            return v;
-        }
-
-        private static int compile(int type, String src) {
-            int s = GLES30.glCreateShader(type);
-            GLES30.glShaderSource(s, src);
-            GLES30.glCompileShader(s);
-            int[] ok = new int[1];
-            GLES30.glGetShaderiv(s, GLES30.GL_COMPILE_STATUS, ok, 0);
-            if (ok[0] == 0) {
-                lastError = GLES30.glGetShaderInfoLog(s);
-                GLES30.glDeleteShader(s);
-                return 0;
-            }
-            return s;
-        }
-    }
 }

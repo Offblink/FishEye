@@ -41,7 +41,7 @@
             android:textSize="13sp" />
     </FrameLayout>
 
-    <!-- 底栏：实时调色面板 + 快门行 -->
+    <!-- 底栏：实时调色面板 + 模式切换 + 快门行 -->
     <LinearLayout
         android:id="@+id/cam_bottom"
         android:layout_width="match_parent"
@@ -54,6 +54,70 @@
             android:layout_width="match_parent"
             android:layout_height="196dp"
             android:background="@android:color/transparent" />
+
+        <!-- 录像中：红点 + 计时 -->
+        <LinearLayout
+            android:id="@+id/cam_rec"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <View
+                android:id="@+id/cam_rec_dot"
+                android:layout_width="8dp"
+                android:layout_height="8dp"
+                android:background="@drawable/rec_dot" />
+
+            <TextView
+                android:id="@+id/cam_rec_time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="7dp"
+                android:letterSpacing="0.08"
+                android:text="00:00"
+                android:textColor="@color/fg"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- 拍照 / 录像：一个胶囊两个标签，别处不再铺第二套控件 -->
+        <LinearLayout
+            android:id="@+id/cam_mode"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/mode_pill"
+            android:orientation="horizontal"
+            android:padding="2dp">
+
+            <TextView
+                android:id="@+id/cam_mode_photo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/mode_on"
+                android:paddingStart="14dp"
+                android:paddingTop="5dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="5dp"
+                android:text="照片"
+                android:textColor="@color/fg"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/cam_mode_video"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingStart="14dp"
+                android:paddingTop="5dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="5dp"
+                android:text="视频"
+                android:textColor="@color/fg_dim"
+                android:textSize="12sp" />
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"

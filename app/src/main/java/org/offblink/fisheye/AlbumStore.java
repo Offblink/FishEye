@@ -11,6 +11,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.util.Size;
 
 import androidx.core.content.ContextCompat;
 
@@ -20,18 +21,35 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
  * MediaStore 的唯一出入口：查、插、删、缩略图。
  *
- * <p>本应用只认自己的相册 {@code Pictures/FishEye}——别的照片不读也不写。
+ * <p>本应用只认自己的相册 {@code FishEye}——别的照片/视频不读也不写。
+ * 照片在 {@code Pictures/FishEye}，录像在 {@code Movies/FishEye}，两边混在一起按时间排。
  */
 final class AlbumStore {
 
     static final String ALBUM = "FishEye";
 
     private AlbumStore() {
+    }
+
+    /** 相册里的一项：可能是照片，也可能是录像 */
+    static final class Item {
+        final Uri uri;
+        final boolean video;
+        final long durationMs;
+        final long dateAdded;
+
+        Item(Uri uri, boolean video, long durationMs, long dateAdded) {
+            this.uri = uri;
+            this.video = video;
+            this.durationMs = durationMs;
+            this.dateAdded = dateAdded;
+        }
     }
 
     /** 存的照片：返回新条目的 Uri */
@@ -79,35 +97,87 @@ final class AlbumStore {
         }
     }
 
-    /** 本应用相册里的全部照片，新→旧 */
-    static List<Uri> list(Context ctx) {
-        List<Uri> out = new ArrayList<>();
-        Uri base = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
-        String[] proj = {MediaStore.Images.Media._ID};
-        String sel;
-        String[] args;
+    // ------------------------------------------------------------------ 录像
+
+    /** Recorder 往哪儿写：Movies/FishEye，API 29+ 先标 pending，封装完再放出来 */
+    static Uri videoCollection() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                ? MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                : MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+    }
+
+    static ContentValues videoValues(String name) {
+        ContentValues v = new ContentValues();
+        v.put(MediaStore.Video.Media.DISPLAY_NAME, name);
+        v.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            sel = MediaStore.Images.Media.RELATIVE_PATH + " LIKE ?";
-            args = new String[]{"%" + ALBUM + "%"};
-        } else {
-            sel = MediaStore.Images.Media.DATA + " LIKE ?";
-            args = new String[]{"%" + ALBUM + "%"};
+            v.put(MediaStore.Video.Media.RELATIVE_PATH,
+                    Environment.DIRECTORY_MOVIES + "/" + ALBUM);
+            v.put(MediaStore.Video.Media.IS_PENDING, 1);
         }
+        return v;
+    }
+
+    /** 封装完成：把 pending 放出来，否则相册里看不见 */
+    static void videoFinalize(Context ctx, Uri uri) {
+        if (uri == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return;
+        }
+        try {
+            ContentValues done = new ContentValues();
+            done.put(MediaStore.Video.Media.IS_PENDING, 0);
+            ctx.getContentResolver().update(uri, done, null, null);
+        } catch (Throwable ignored) {
+            // 放不出来时文件还在，只是系统相册里要等一次扫描
+        }
+    }
+
+    // -------------------------------------------------------------------- 查
+
+    /** 本应用相册里的全部照片与录像，新→旧 */
+    static List<Item> list(Context ctx) {
+        List<Item> out = new ArrayList<>();
+        collect(ctx, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, false, out);
+        collect(ctx, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, out);
+        Collections.sort(out, (a, b) -> Long.compare(b.dateAdded, a.dateAdded));
+        return out;
+    }
+
+    private static void collect(Context ctx, Uri base, boolean video, List<Item> out) {
+        String idCol = video ? MediaStore.Video.Media._ID : MediaStore.Images.Media._ID;
+        String dateCol = video ? MediaStore.Video.Media.DATE_ADDED
+                : MediaStore.Images.Media.DATE_ADDED;
+        String pathCol = video ? MediaStore.Video.Media.RELATIVE_PATH
+                : MediaStore.Images.Media.RELATIVE_PATH;
+        String dataCol = video ? MediaStore.Video.Media.DATA : MediaStore.Images.Media.DATA;
+        String[] proj = video
+                ? new String[]{idCol, dateCol, MediaStore.Video.Media.DURATION}
+                : new String[]{idCol, dateCol};
+        String sel;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            sel = pathCol + " LIKE ?";
+        } else {
+            sel = dataCol + " LIKE ?";
+        }
+        String[] args = new String[]{"%" + ALBUM + "%"};
         try (android.database.Cursor c = ctx.getContentResolver().query(
-                base, proj, sel, args, MediaStore.Images.Media.DATE_ADDED + " DESC")) {
-            if (c != null) {
-                while (c.moveToNext()) {
-                    out.add(ContentUris.withAppendedId(base, c.getLong(0)));
-                }
+                base, proj, sel, args, MediaStore.MediaColumns.DATE_ADDED + " DESC")) {
+            if (c == null) {
+                return;
+            }
+            while (c.moveToNext()) {
+                long id = c.getLong(0);
+                long date = c.getLong(1);
+                long dur = video ? c.getLong(2) : 0;
+                out.add(new Item(ContentUris.withAppendedId(base, id), video, dur, date));
             }
         } catch (Throwable ignored) {
             // 没权限/系统异常时当空相册，界面自己会提示
         }
-        return out;
     }
 
-    static Uri latest(Context ctx) {
-        List<Uri> all = list(ctx);
+    static Item latest(Context ctx) {
+        List<Item> all = list(ctx);
         return all.isEmpty() ? null : all.get(0);
     }
 
@@ -120,12 +190,19 @@ final class AlbumStore {
                 }
             };
 
-    static Bitmap cachedThumb(Uri uri, int size) {
-        return THUMBS.get(uri + "@" + size);
+    static Bitmap cachedThumb(Item item, int size) {
+        return THUMBS.get(item.uri + "@" + size);
     }
 
-    /** 缩略图：先按 1/4 采样解码，再按长边缩到 target */
-    static Bitmap thumbnail(ContentResolver cr, Uri uri, int target) {
+    /** 缩略图：照片先按 1/4 采样解码再缩；录像问系统要一帧封面 */
+    static Bitmap thumbnail(Context ctx, Item item, int target) {
+        if (item.video) {
+            return videoThumbnail(ctx, item.uri, target);
+        }
+        return photoThumbnail(ctx.getContentResolver(), item.uri, target);
+    }
+
+    private static Bitmap photoThumbnail(ContentResolver cr, Uri uri, int target) {
         try (InputStream in = cr.openInputStream(uri)) {
             if (in == null) {
                 return null;
@@ -145,23 +222,48 @@ final class AlbumStore {
                 if (bmp == null) {
                     return null;
                 }
-                float s = target / (float) Math.max(bmp.getWidth(), bmp.getHeight());
-                Bitmap out;
-                if (s < 1f) {
-                    Bitmap small = Bitmap.createScaledBitmap(bmp,
-                            Math.max(1, Math.round(bmp.getWidth() * s)),
-                            Math.max(1, Math.round(bmp.getHeight() * s)), true);
-                    bmp.recycle();
-                    out = small;
-                } else {
-                    out = bmp;
-                }
+                Bitmap out = scaleTo(bmp, target);
                 THUMBS.put(uri + "@" + target, out);
                 return out;
             }
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    private static Bitmap videoThumbnail(Context ctx, Uri uri, int target) {
+        try {
+            Bitmap bmp;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                bmp = ctx.getContentResolver().loadThumbnail(uri, new Size(target, target), null);
+            } else {
+                // 26–28 只有这套老接口能拿视频封面
+                bmp = MediaStore.Video.Thumbnails.getThumbnail(ctx.getContentResolver(),
+                        ContentUris.parseId(uri), MediaStore.Video.Thumbnails.MINI_KIND, null);
+            }
+            if (bmp == null) {
+                return null;
+            }
+            Bitmap out = scaleTo(bmp, target);
+            THUMBS.put(uri + "@" + target, out);
+            return out;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static Bitmap scaleTo(Bitmap bmp, int target) {
+        float s = target / (float) Math.max(bmp.getWidth(), bmp.getHeight());
+        if (s >= 1f) {
+            return bmp;
+        }
+        Bitmap small = Bitmap.createScaledBitmap(bmp,
+                Math.max(1, Math.round(bmp.getWidth() * s)),
+                Math.max(1, Math.round(bmp.getHeight() * s)), true);
+        if (small != bmp) {
+            bmp.recycle();
+        }
+        return small;
     }
 
     static void delete(Context ctx, Uri uri) {
@@ -173,15 +275,19 @@ final class AlbumStore {
     }
 
     static boolean hasReadPermission(Context ctx) {
-        String p = Build.VERSION.SDK_INT >= 33
-                ? android.Manifest.permission.READ_MEDIA_IMAGES
-                : android.Manifest.permission.READ_EXTERNAL_STORAGE;
-        return ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED;
+        for (String p : storagePermissions()) {
+            if (ContextCompat.checkSelfPermission(ctx, p) != PackageManager.PERMISSION_GRANTED) {
+                return false;
+            }
+        }
+        return true;
     }
 
     static String[] storagePermissions() {
         if (Build.VERSION.SDK_INT >= 33) {
-            return new String[]{android.Manifest.permission.READ_MEDIA_IMAGES};
+            return new String[]{
+                    android.Manifest.permission.READ_MEDIA_IMAGES,
+                    android.Manifest.permission.READ_MEDIA_VIDEO};
         }
         if (Build.VERSION.SDK_INT <= 28) {
             return new String[]{
