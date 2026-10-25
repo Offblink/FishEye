@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <FrameLayout
+            android:id="@+id/gal_top"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="20dp"
+            android:paddingTop="16dp"
+            android:paddingEnd="20dp"
+            android:paddingBottom="12dp">
+
+            <TextView
+                android:id="@+id/gal_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="start"
+                android:letterSpacing="0.18"
+                android:text="PICTURES / FISHEYE"
+                android:textColor="@color/fg"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/gal_count"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="end"
+                android:textColor="@color/fg_dim"
+                android:textSize="12sp" />
+        </FrameLayout>
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/gal_grid"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/gal_empty"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:text="还没有照片"
+        android:textColor="@color/fg_dim"
+        android:textSize="13sp"
+        android:visibility="gone" />
+
+</FrameLayout>

@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/cam_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:keepScreenOn="true">
+
+    <org.offblink.fisheye.GlPreviewView
+        android:id="@+id/cam_preview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- 点按对焦框 -->
+    <View
+        android:id="@+id/cam_focus"
+        android:layout_width="76dp"
+        android:layout_height="76dp"
+        android:alpha="0"
+        android:background="@drawable/focus_ring"
+        android:visibility="invisible" />
+
+    <!-- 顶栏 -->
+    <FrameLayout
+        android:id="@+id/cam_top"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:paddingStart="20dp"
+        android:paddingTop="14dp"
+        android:paddingEnd="20dp">
+
+        <TextView
+            android:id="@+id/cam_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="start"
+            android:letterSpacing="0.22"
+            android:text="FISH EYE"
+            android:textColor="@color/fg"
+            android:textSize="13sp" />
+    </FrameLayout>
+
+    <!-- 底栏：实时调色面板 + 快门行 -->
+    <LinearLayout
+        android:id="@+id/cam_bottom"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical">
+
+        <WebView
+            android:id="@+id/cam_controls"
+            android:layout_width="match_parent"
+            android:layout_height="196dp"
+            android:background="@android:color/transparent" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="24dp"
+            android:paddingTop="6dp"
+            android:paddingEnd="24dp"
+            android:paddingBottom="10dp">
+
+            <FrameLayout
+                android:id="@+id/cam_thumb_wrap"
+                android:layout_width="46dp"
+                android:layout_height="46dp"
+                android:background="@drawable/thumb_frame"
+                android:clipToOutline="true">
+
+                <ImageView
+                    android:id="@+id/cam_thumb"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@string/app_name"
+                    android:scaleType="centerCrop" />
+            </FrameLayout>
+
+            <FrameLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center">
+
+                <View
+                    android:id="@+id/cam_shutter"
+                    android:layout_width="72dp"
+                    android:layout_height="72dp"
+                    android:layout_gravity="center"
+                    android:background="@drawable/shutter_ring" />
+
+                <View
+                    android:id="@+id/cam_shutter_disc"
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:layout_gravity="center"
+                    android:background="@drawable/shutter_disc" />
+            </FrameLayout>
+
+            <TextView
+                android:id="@+id/cam_gallery"
+                android:layout_width="46dp"
+                android:layout_height="46dp"
+                android:gravity="center"
+                android:letterSpacing="0.1"
+                android:text="相册"
+                android:textColor="@color/fg"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- 没给相机权限时的引导层 -->
+    <LinearLayout
+        android:id="@+id/cam_perm"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#F2000000"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="FishEye 需要相机"
+            android:textColor="@color/fg"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/cam_perm_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:background="@drawable/perm_btn"
+            android:paddingStart="22dp"
+            android:paddingTop="11dp"
+            android:paddingEnd="22dp"
+            android:paddingBottom="11dp"
+            android:text="授予权限"
+            android:textColor="@color/fg"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- 快门黑闪 -->
+    <View
+        android:id="@+id/cam_flash"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:alpha="0"
+        android:background="@android:color/black"
+        android:importantForAccessibility="no" />
+
+</FrameLayout>

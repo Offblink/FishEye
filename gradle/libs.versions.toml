@@ -1,0 +1,19 @@
+[versions]
+agp = "9.3.2"
+appcompat = "1.7.0"
+activity = "1.8.1"
+recyclerview = "1.3.2"
+camerax = "1.6.2"
+exifinterface = "1.4.2"
+
+[libraries]
+appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }
+recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version.ref = "recyclerview" }
+camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }

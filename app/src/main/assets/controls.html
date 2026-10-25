@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<title>张力</title>
+<link rel="stylesheet" href="controls.css">
+</head>
+<body>
+
+<div id="wrap">
+    <div id="readout">
+        <div id="who">
+            <span id="letter">fish</span>
+            <span id="cname">鱼眼</span>
+        </div>
+        <div id="val"><span id="num">55</span><i>%</i></div>
+    </div>
+
+    <div id="track" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="55">
+        <div id="rail"></div>
+        <div id="fill"></div>
+        <div id="knob"></div>
+    </div>
+
+    <div id="tabs"></div>
+
+    <div id="presets">
+        <span>预设</span>
+        <button class="chip" data-preset="wide">广角</button>
+        <button class="chip" data-preset="clash">冲突</button>
+        <button class="chip" data-preset="runaway">失控</button>
+    </div>
+</div>
+
+<script>
+(function () {
+    var KEYS = [
+        { key: "fisheye",  name: "鱼眼", tag: "fish"   },
+        { key: "chroma",   name: "色散", tag: "rgb"    },
+        { key: "contrast", name: "对比", tag: "tone"   },
+        { key: "local",    name: "局部", tag: "detail" },
+        { key: "blur",     name: "动势", tag: "motion" },
+        { key: "vignette", name: "暗角", tag: "edge"   }
+    ];
+
+    var values = { fisheye: 55, chroma: 23, contrast: 45, local: 40, blur: 15, vignette: 30 };
+    var active = 0;
+    var dragging = false;
+
+    var track = document.getElementById("track");
+    var fill = document.getElementById("fill");
+    var knob = document.getElementById("knob");
+    var num = document.getElementById("num");
+    var cname = document.getElementById("cname");
+    var letter = document.getElementById("letter");
+    var tabs = document.getElementById("tabs");
+
+    KEYS.forEach(function (k, i) {
+        var b = document.createElement("button");
+        b.className = "tab" + (i === 0 ? " on" : "");
+        b.innerHTML = "<b>" + k.name + "</b>";
+        b.addEventListener("click", function () { select(i); });
+        tabs.appendChild(b);
+    });
+
+    function select(i) {
+        active = i;
+        var kids = tabs.children;
+        for (var j = 0; j < kids.length; j++) {
+            kids[j].classList.toggle("on", j === i);
+        }
+        render();
+    }
+
+    function render() {
+        var k = KEYS[active];
+        var v = values[k.key];
+        cname.textContent = k.name;
+        letter.textContent = k.tag;
+        num.textContent = Math.round(v);
+        fill.style.width = v + "%";
+        knob.style.left = v + "%";
+        track.setAttribute("aria-valuenow", Math.round(v));
+    }
+
+    function valueAt(clientX) {
+        var r = track.getBoundingClientRect();
+        var t = (clientX - r.left) / Math.max(1, r.width);
+        return Math.max(0, Math.min(100, t * 100));
+    }
+
+    function push(v) {
+        var k = KEYS[active].key;
+        values[k] = v;
+        render();
+        if (window.fish && window.fish.param) {
+            window.fish.param(k, v);
+        }
+    }
+
+    track.addEventListener("pointerdown", function (e) {
+        dragging = true;
+        document.body.classList.add("dragging");
+        track.setPointerCapture(e.pointerId);
+        push(valueAt(e.clientX));
+    });
+    track.addEventListener("pointermove", function (e) {
+        if (dragging) { push(valueAt(e.clientX)); }
+    });
+    track.addEventListener("pointerup", function (e) {
+        dragging = false;
+        document.body.classList.remove("dragging");
+        try { track.releasePointerCapture(e.pointerId); } catch (err) {}
+    });
+    track.addEventListener("pointercancel", function () {
+        dragging = false;
+        document.body.classList.remove("dragging");
+    });
+
+    document.querySelectorAll(".chip").forEach(function (b) {
+        b.addEventListener("click", function () {
+            if (window.fish && window.fish.preset) {
+                window.fish.preset(b.getAttribute("data-preset"));
+            }
+        });
+    });
+
+    // ---- 原生侧入口 ----
+    window.setValues = function (arr) {
+        for (var i = 0; i < KEYS.length && i < arr.length; i++) {
+            values[KEYS[i].key] = arr[i];
+        }
+        render();
+    };
+
+    window.setTheme = function (dark) {
+        document.body.classList.toggle("light", !dark);
+    };
+
+    render();
+    if (window.fish && window.fish.ready) {
+        window.fish.ready();
+    }
+})();
+</script>
+</body>
+</html>

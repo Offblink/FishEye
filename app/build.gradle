@@ -1,0 +1,49 @@
+plugins {
+    alias(libs.plugins.android.application)
+}
+
+android {
+    namespace 'org.offblink.fisheye'
+    compileSdk {
+        version = release(37)
+    }
+
+    defaultConfig {
+        applicationId "org.offblink.fisheye"
+        minSdk 26
+        targetSdk 37
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    buildTypes {
+        release {
+            // @JavascriptInterface 方法在 R8 优化下需要额外 keep 规则；本应用以调试包为
+            // 主产物，直接关掉优化，省掉一整套混淆配置
+            optimization {
+                enable false
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+
+dependencies {
+    implementation libs.appcompat
+    implementation libs.activity
+    implementation libs.recyclerview
+    // 取景：CameraX 只用来驱动相机与快门，画面由自己的 GL 管线接管
+    implementation libs.camera.core
+    implementation libs.camera.camera2
+    implementation libs.camera.lifecycle
+    // 存图/回显时按 EXIF 方向摆正照片
+    implementation libs.exifinterface
+}
