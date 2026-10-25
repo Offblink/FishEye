@@ -46,6 +46,7 @@ CameraX Preview ──SurfaceTexture(外部纹理)──> GL 线程
 
 - **预览零 CPU 回读**：全程在显存里过。唯一的回读是每 500ms 取一张 16×16 缩图，只看屏幕下三分之一（控件文字压着的那一带）算亮度，用来反色。
 - **成片走同一条管线**：快门后把 JPEG 解成 Bitmap，交给**同一个** `GlPreviewView` 在离屏 FBO 上跑同样的两趟 shader，再 `glReadPixels` 回 Bitmap 存盘。两边的 GLSL 是同一份字符串。
+- **朝向听设备的**：取景的上下/旋转来自 `SurfaceTexture.getTransformMatrix()`，不再自己算——真机与模拟器的 buffer 约定不同，自己算必翻。成片那侧仍是 CPU 按 EXIF 摆正 + 纯 2D 采样。
 - **方向在 CPU 侧摆正**：EXIF 角度先用 `Matrix` 转到位，GL 只做纯 2D 采样。否则「竖翻 + 旋转」会复合成反射，拍出来左右镜像（这个坑实测踩过）。
 - **参数平滑**：滑块值不直接进 shader，每帧向目标靠 22%，拖过去是「滑」过去的，模糊中心与色散都不跳帧。
 - **鱼眼连续可退化**：`r_src = tan(r·k)/tan(rmax·k)·rmax`，k→0 时退化成线性直出，所以强度从 0 拖到 100 没有跳变点。

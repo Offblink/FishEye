@@ -106,6 +106,10 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
     private SurfaceRequest pendingRequest;
     private int srcW = 1, srcH = 1;
     private int camRotDeg;
+    private final float[] stMatrix = new float[16];
+    private final float[] stMat3 = new float[9];
+    private boolean loggedSt;
+    private static final float[] IDENTITY3 = {1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f};
     private final AtomicBoolean frameQueued = new AtomicBoolean(false);
     private volatile boolean camBound;
 
@@ -436,12 +440,29 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         } catch (Throwable t) {
             return;
         }
+        camTex.getTransformMatrix(stMatrix);
+        if (!loggedSt && srcW > 1) {
+            loggedSt = true;
+            StringBuilder sb = new StringBuilder("st=[");
+            for (float v : stMatrix) sb.append(String.format("%.2f ", v));
+            android.util.Log.d("FishEye", sb.append("] rot=").append(camRotDeg)
+                    .append(" src=").append(srcW).append("x").append(srcH).toString());
+        }
+        // 4x4 列主序 → 3x3 列主序（只要 x/y 的仿射部分）
+        stMat3[0] = stMatrix[0];
+        stMat3[1] = stMatrix[1];
+        stMat3[2] = 0f;
+        stMat3[3] = stMatrix[4];
+        stMat3[4] = stMatrix[5];
+        stMat3[5] = 0f;
+        stMat3[6] = stMatrix[12];
+        stMat3[7] = stMatrix[13];
+        stMat3[8] = 1f;
         smooth.approach(target, 0.22f);
         ensureFbo(surfaceW, surfaceH);
         int rw = (camRotDeg % 180 == 0) ? srcW : srcH;
         int rh = (camRotDeg % 180 == 0) ? srcH : srcW;
-        render(progExt, extId, true, 1f / srcW, 1f / srcH,
-                (float) Math.toRadians(-camRotDeg), rw, rh, false);
+        render(progExt, extId, true, 1f / srcW, 1f / srcH, 0f, rw, rh, false);
         EGL14.eglSwapBuffers(eglDpy, eglSrf);
         framesDrawn++;
         adaptResolution(SystemClock.uptimeMillis() - startMs);
@@ -528,6 +549,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         GLES30.glUniform1f(main.loc("uSaturation"), smooth.saturation);
         GLES30.glUniform1f(main.loc("uLocal"), smooth.local);
         GLES30.glUniform2f(main.loc("uTexel"), texelX, texelY);
+        GLES30.glUniformMatrix3fv(main.loc("uSt"), 1, false, imageSrc ? IDENTITY3 : stMat3, 0);
         drawQuad(main);
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);
@@ -726,6 +748,8 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         GLES30.glUniform1f(prog2d.loc("uSaturation"), smooth.saturation);
         GLES30.glUniform1f(prog2d.loc("uLocal"), smooth.local);
         GLES30.glUniform2f(prog2d.loc("uTexel"), 1f / Math.max(1, rw), 1f / Math.max(1, rh));
+        // 成片这条是纯 2D 采样，朝向已在 CPU 侧摆正：矩阵必须是单位阵
+        GLES30.glUniformMatrix3fv(prog2d.loc("uSt"), 1, false, IDENTITY3, 0);
         drawQuad(prog2d);
 
         // pass 2

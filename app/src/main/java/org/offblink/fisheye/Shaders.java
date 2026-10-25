@@ -41,6 +41,7 @@ final class Shaders {
             + "uniform float uSaturation;\n"
             + "uniform float uLocal;\n"
             + "uniform vec2  uTexel;\n"
+            + "uniform mat3  uSt;\n"
             + "const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);\n";
 
     private static final String SAMPLER_EXTERNAL =
@@ -54,7 +55,9 @@ final class Shaders {
     /** 输出像素 → 源纹理坐标：竖翻（纹理约定）→ 旋转（方向）→ 缩放（cover 裁切） */
     private static final String BODY = ""
             + "vec2 mapUv(vec2 uv) {\n"
-            + "  vec2 p = uv - 0.5;\n"
+            // SurfaceTexture 给的矩阵负责 buffer 自身的朝向/裁剪（真机的上下翻转就在这里），
+            // 必须在旋转与裁切之前应用
+            + "  vec2 p = (uSt * vec3(uv, 1.0)).xy - 0.5;\n"
             + "  if (uFlipY > 0.5) p.y = -p.y;\n"
             + "  float c = cos(uRot), s = sin(uRot);\n"
             + "  p = vec2(c * p.x - s * p.y, s * p.x + c * p.y);\n"
