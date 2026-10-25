@@ -81,6 +81,7 @@
             </FrameLayout>
 
             <FrameLayout
+                android:id="@+id/cam_shutter_wrap"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -101,15 +102,10 @@
                     android:background="@drawable/shutter_disc" />
             </FrameLayout>
 
-            <TextView
-                android:id="@+id/cam_gallery"
+            <!-- 相册入口只留左边那个缩略图；这里放等宽占位，让快门保持居中 -->
+            <View
                 android:layout_width="46dp"
-                android:layout_height="46dp"
-                android:gravity="center"
-                android:letterSpacing="0.1"
-                android:text="相册"
-                android:textColor="@color/fg"
-                android:textSize="12sp" />
+                android:layout_height="46dp" />
         </LinearLayout>
     </LinearLayout>
 

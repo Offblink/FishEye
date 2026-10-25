@@ -207,10 +207,18 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
 
     @Override
     public void surfaceCreated(@NonNull SurfaceHolder holder) {
+        final Surface s = holder.getSurface();
+        final int w = getWidth();
+        final int h = getHeight();
         if (!thread.isAlive()) {
             thread.start();
             gl = new Handler(thread.getLooper());
             gl.post(this::initGl);
+        }
+        // 从相册/调色页回来时，系统可能只回调 created、不再回调 changed（尺寸没变）。
+        // 少了这一次绑定，EGL 窗口表面就一直是销毁后的空壳 —— 界面回来是黑的。
+        if (s != null && s.isValid()) {
+            gl.post(() -> bindSurface(s, w, h));
         }
     }
 
@@ -703,8 +711,9 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         boolean swap = (rotationDeg % 180) != 0;
         int outW = swap ? h : w;
         int outH = swap ? w : h;
-        // 超大照片先降到 4096 以内：GL 纹理上限因机型而异，宁可小一点也不炸
-        float scale = Math.min(1f, 4096f / Math.max(outW, outH));
+        // 成片上限 2048：取景是 12MP 的话，4096 边会让 readPixels + 两张 Bitmap
+        // 一口气吃掉 200MB+，中端机上就是 OOM / 假死。张力片看不出分辨率差别。
+        float scale = Math.min(1f, 2048f / Math.max(outW, outH));
         outW = Math.max(1, Math.round(outW * scale));
         outH = Math.max(1, Math.round(outH * scale));
 

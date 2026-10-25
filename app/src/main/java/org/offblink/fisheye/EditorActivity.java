@@ -140,7 +140,7 @@ public class EditorActivity extends AppCompatActivity {
             BitmapFactory.decodeStream(in, null, probe);
             int sample = 1;
             int longest = Math.max(probe.outWidth, probe.outHeight);
-            while (longest / (sample * 2) >= 3000) {
+            while (longest / sample > 2048) {
                 sample *= 2;
             }
             BitmapFactory.Options o = new BitmapFactory.Options();

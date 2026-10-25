@@ -59,7 +59,6 @@ public class CameraActivity extends AppCompatActivity {
     private View flash;
     private View permGate;
     private TextView title;
-    private TextView galleryLabel;
     private View thumbWrap;
 
     private ProcessCameraProvider provider;
@@ -98,7 +97,6 @@ public class CameraActivity extends AppCompatActivity {
         flash = findViewById(R.id.cam_flash);
         permGate = findViewById(R.id.cam_perm);
         title = findViewById(R.id.cam_title);
-        galleryLabel = findViewById(R.id.cam_gallery);
 
         applyInsets();
         setupControls();
@@ -110,19 +108,10 @@ public class CameraActivity extends AppCompatActivity {
             return t;
         });
 
-        shutter.setOnClickListener(v -> takePhoto());
-        findViewById(R.id.cam_gallery).setOnClickListener(v ->
-                startActivity(new Intent(this, GalleryActivity.class)));
-        thumbWrap.setOnClickListener(v -> {
-            Uri last = AlbumStore.latest(this);
-            if (last == null) {
-                startActivity(new Intent(this, GalleryActivity.class));
-                return;
-            }
-            startActivity(new Intent(this, EditorActivity.class)
-                    .setData(last)
-                    .putExtra(EditorActivity.EXTRA_ALLOW_OVERWRITE, true));
-        });
+        // 点击挂在整块上：中间那块白盘会先接到触摸，只给环设监听的话点正中会没反应
+        findViewById(R.id.cam_shutter_wrap).setOnClickListener(v -> takePhoto());
+        // 左下缩略图就是相册入口（不再在右下放第二个「相册」）
+        thumbWrap.setOnClickListener(v -> startActivity(new Intent(this, GalleryActivity.class)));
         findViewById(R.id.cam_perm_btn).setOnClickListener(v -> permLauncher.launch(requested()));
 
         preview.setLumaListener(this::onPreviewLuma);
@@ -347,6 +336,14 @@ public class CameraActivity extends AppCompatActivity {
         } catch (Throwable ignored) {
         }
 
+        // 看门狗：解码/烘焙/写 MediaStore 任何一步卡住，20 秒后把快门还回来并说明
+        main.postDelayed(() -> {
+            if (capturing) {
+                capturing = false;
+                Ui.toast(this, "处理超时，已放弃这次拍摄");
+            }
+        }, 20000);
+
         final File out = AlbumStore.tempJpeg(this);
         ImageCapture.OutputFileOptions opts =
                 new ImageCapture.OutputFileOptions.Builder(out).build();
@@ -368,7 +365,7 @@ public class CameraActivity extends AppCompatActivity {
     private void bakeAndSave(final File jpeg) {
         io.execute(() -> {
             int rotation = exifRotation(jpeg.getPath());
-            Bitmap decoded = decodeSampled(jpeg.getPath(), 4096);
+            Bitmap decoded = decodeSampled(jpeg.getPath(), 2048);
             if (decoded == null) {
                 capturing = false;
                 //noinspection ResultOfMethodCallIgnored
@@ -448,12 +445,22 @@ public class CameraActivity extends AppCompatActivity {
 
     /** 解码；大图先按 2 的幂降采样，免得 12MP 原图直接吃掉 48MB */
     static Bitmap decodeSampled(String path, int maxSide) {
+        try {
+            return decodeSampledInner(path, maxSide);
+        } catch (OutOfMemoryError e) {
+            return null;
+        }
+    }
+
+    private static Bitmap decodeSampledInner(String path, int maxSide) {
         BitmapFactory.Options probe = new BitmapFactory.Options();
         probe.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(path, probe);
         int sample = 1;
         int longest = Math.max(probe.outWidth, probe.outHeight);
-        while (longest / (sample * 2) >= maxSide) {
+        // 「超过上限就降一级」，不要写成「超过两倍才降」：
+        // 4032px 的原图对着 2048 的上限，前者会原地不动、把 48MB 整张解出来
+        while (longest / sample > maxSide) {
             sample *= 2;
         }
         BitmapFactory.Options o = new BitmapFactory.Options();
@@ -496,7 +503,6 @@ public class CameraActivity extends AppCompatActivity {
         darkUi = dark;
         int c = dark ? Color.WHITE : Color.BLACK;
         title.setTextColor(c);
-        galleryLabel.setTextColor(c);
         Drawable bg = thumbWrap.getBackground();
         if (bg != null) {
             bg.setTint(dark ? 0x66FFFFFF : 0x44000000);
