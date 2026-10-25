@@ -78,7 +78,7 @@ public class CameraActivity extends AppCompatActivity {
     private View flash;
     private View permGate;
     private TextView title;
-    private TextView flipLabel;
+    private ImageView flipLabel;
     private CameraSelector selector = CameraSelector.DEFAULT_BACK_CAMERA;
     private View thumbWrap;
 
@@ -166,8 +166,16 @@ public class CameraActivity extends AppCompatActivity {
         videoProcessor.setErrorListener(msg -> runOnUiThread(() -> Ui.toast(this, msg)));
         videoProcessor.setParams(params);
         flipLabel.setOnClickListener(v -> flipCamera());
-        // 左下缩略图就是相册入口（不再在右下放第二个「相册」）
-        thumbWrap.setOnClickListener(v -> startActivity(new Intent(this, GalleryActivity.class)));
+        // 左下缩略图就是相册入口（不再在右下放第二个「相册」）：
+        // 从这颗缩略图的位置放大进相册，回来时缩回原处
+        thumbWrap.setOnClickListener(v -> {
+            int[] rect = Ui.rectOnScreen(v);
+            Ui.snapshot(this, () -> {
+                startActivity(new Intent(this, GalleryActivity.class)
+                        .putExtra(GalleryActivity.EXTRA_ZOOM_FROM, rect));
+                overridePendingTransition(0, 0);
+            });
+        });
         findViewById(R.id.cam_perm_btn).setOnClickListener(v -> permLauncher.launch(requested()));
 
         preview.setLumaListener(this::onPreviewLuma);
@@ -771,7 +779,7 @@ public class CameraActivity extends AppCompatActivity {
         darkUi = dark;
         int c = dark ? Color.WHITE : Color.BLACK;
         title.setTextColor(c);
-        flipLabel.setTextColor(c);
+        flipLabel.setImageTintList(android.content.res.ColorStateList.valueOf(c));
         Drawable bg = thumbWrap.getBackground();
         if (bg != null) {
             bg.setTint(dark ? 0x66FFFFFF : 0x44000000);

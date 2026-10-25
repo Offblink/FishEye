@@ -170,7 +170,7 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
         // 录像：右下角一枚时长角标，一眼分得清是照片还是片子
         if (item.video) {
             holder.duration.setVisibility(View.VISIBLE);
-            holder.duration.setText("\u25B6 " + duration(item.durationMs));
+            holder.duration.setText("\u25B6 " + Ui.duration(item.durationMs));
         } else {
             holder.duration.setVisibility(View.GONE);
         }
@@ -372,13 +372,4 @@ class PhotoAdapter extends RecyclerView.Adapter<PhotoAdapter.VH> {
         }
     }
 
-    /** 0:07 / 1:03 / 12:00，超过一小时就别抻成两位了 */
-    static String duration(long ms) {
-        long s = Math.max(0, ms / 1000);
-        if (s >= 3600) {
-            return String.format(java.util.Locale.US, "%d:%02d:%02d",
-                    s / 3600, (s % 3600) / 60, s % 60);
-        }
-        return String.format(java.util.Locale.US, "%d:%02d", s / 60, s % 60);
-    }
 }

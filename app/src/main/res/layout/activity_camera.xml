@@ -166,16 +166,16 @@
                     android:background="@drawable/shutter_disc" />
             </FrameLayout>
 
-            <!-- 相册入口只留左边那个缩略图；右边放前后摄切换 -->
-            <TextView
+            <!-- 相册入口只留左边那个缩略图；右边放前后摄切换（图标） -->
+            <ImageView
                 android:id="@+id/cam_flip"
                 android:layout_width="46dp"
                 android:layout_height="46dp"
-                android:gravity="center"
-                android:letterSpacing="0.1"
-                android:text="翻转"
-                android:textColor="@color/fg"
-                android:textSize="12sp" />
+                android:contentDescription="翻转镜头"
+                android:padding="11dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_flip"
+                android:tint="@color/fg" />
         </LinearLayout>
     </LinearLayout>
 

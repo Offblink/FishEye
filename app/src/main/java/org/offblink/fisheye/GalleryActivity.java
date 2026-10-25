@@ -27,7 +27,12 @@ import java.util.concurrent.Executors;
  */
 public class GalleryActivity extends AppCompatActivity {
 
+    /** 从相机页缩略图位置放大进来的源矩形（屏幕坐标） */
+    public static final String EXTRA_ZOOM_FROM = "zoom_from";
+
     private RecyclerView grid;
+    private int[] zoomFrom;
+    private boolean closing;
     private TextView title;
     private TextView action;
     private TextView empty;
@@ -42,6 +47,12 @@ public class GalleryActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_gallery);
+
+        // 从相机页进来：从缩略图位置放大到全屏（和照片预览同一套缩放切页）
+        zoomFrom = getIntent().getIntArrayExtra(EXTRA_ZOOM_FROM);
+        if (zoomFrom != null) {
+            Ui.zoomIn(this, findViewById(R.id.gal_root), zoomFrom);
+        }
 
         grid = findViewById(R.id.gal_grid);
         title = findViewById(R.id.gal_title);
@@ -64,7 +75,7 @@ public class GalleryActivity extends AppCompatActivity {
                     adapter.toggle(uri);
                     refreshChrome();
                 } else if (adapter.isVideo(uri)) {
-                    playVideo(uri);
+                    openVideo(rect, uri);
                 } else {
                     openPreview(rect, uri);
                 }
@@ -110,6 +121,19 @@ public class GalleryActivity extends AppCompatActivity {
     public void onBackPressed() {
         if (selectionMode) {
             exitSelection();
+        } else {
+            closePage();
+        }
+    }
+
+    /** 返回：缩放过进来的缩回缩略图位置，否则走系统默认 */
+    private void closePage() {
+        if (closing) {
+            return;
+        }
+        if (zoomFrom != null) {
+            closing = true;
+            Ui.shrinkFinish(this, findViewById(R.id.gal_root), zoomFrom);
         } else {
             super.onBackPressed();
         }
@@ -191,16 +215,14 @@ public class GalleryActivity extends AppCompatActivity {
         });
     }
 
-    /** 录像不自己做播放器：交给系统里能放 mp4 的播放器，进来还是这部片子 */
-    private void playVideo(Uri uri) {
-        Intent view = new Intent(Intent.ACTION_VIEW)
-                .setDataAndType(uri, "video/mp4")
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try {
-            startActivity(view);
-        } catch (android.content.ActivityNotFoundException e) {
-            Ui.toast(this, "这台设备没有能放视频的应用");
-        }
+    /** 录像进自己的播放器：同样从格子位置放大进去，返回时缩回同一格 */
+    private void openVideo(int[] rect, Uri uri) {
+        Ui.snapshot(this, () -> {
+            startActivity(new Intent(this, VideoActivity.class)
+                    .setData(uri)
+                    .putExtra(VideoActivity.EXTRA_ZOOM_FROM, rect));
+            overridePendingTransition(0, 0);
+        });
     }
 
     private void confirmDelete() {

@@ -44,7 +44,13 @@
             android:exported="false"
             android:screenOrientation="portrait" />
 
-        <!-- 相册：只列本应用拍的照片 -->
+        <!-- 播放：相册里点开一段录像（自绘的进度条与播放键） -->
+        <activity
+            android:name=".VideoActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- 相册：只列本应用拍的照片与录像 -->
         <activity
             android:name=".GalleryActivity"
             android:exported="false"
