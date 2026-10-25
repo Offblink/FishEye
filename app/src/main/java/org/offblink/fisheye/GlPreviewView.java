@@ -117,8 +117,6 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
     // 静止图源（调色页 / 烘焙）
     private int imgTex = -1;
     private int imgW = 1, imgH = 1;
-    private boolean imageMode;
-    private Bitmap pendingImage;
 
     public GlPreviewView(Context context) {
         this(context, null);
@@ -134,9 +132,6 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
 
     public void setParams(Params p) {
         target.copyFrom(p);
-        if (imageMode) {
-            requestRender();
-        }
     }
 
     public Params params() {
@@ -168,20 +163,6 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
     public void setFocus(float x, float y) {
         focusX = Math.max(0.05f, Math.min(0.95f, x));
         focusY = Math.max(0.05f, Math.min(0.95f, y));
-    }
-
-    /** 切到静止图模式：同一套 shader 渲染一张 Bitmap */
-    public void setImage(Bitmap bitmap) {
-        imageMode = true;
-        final Bitmap src = bitmap;
-        gl.post(() -> {
-            pendingImage = src;
-            if (programsReady) {
-                uploadImage(src);
-                pendingImage = null;
-                drawImage();
-            }
-        });
     }
 
     /**
@@ -262,9 +243,6 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         camBound = true;
         req.setTransformationInfoListener(mainExecutor, info -> {
             camRotDeg = info.getRotationDegrees();
-            if (imageMode) {
-                return;
-            }
             requestRender();
         });
         req.provideSurface(camSurface, mainExecutor, result -> {
@@ -389,17 +367,9 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0);
             programsReady = true;
             ensureCameraTexture();
-            if (imageMode && pendingImage != null) {
-                uploadImage(pendingImage);
-                pendingImage = null;
-            }
         }
         consumeRequest();
-        if (imageMode) {
-            drawImage();
-        } else {
-            requestRender();
-        }
+        requestRender();
     }
 
     private void recreateWindowSurface(Surface surface) {
@@ -436,7 +406,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
 
     private void drawCamera() {
         frameQueued.set(false);
-        if (!programsReady || camTex == null || eglSrf == EGL14.EGL_NO_SURFACE || imageMode) {
+        if (!programsReady || camTex == null || eglSrf == EGL14.EGL_NO_SURFACE) {
             return;
         }
         if (!EGL14.eglMakeCurrent(eglDpy, eglSrf, eglSrf, eglCtx)) {
@@ -470,7 +440,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         ensureFbo(surfaceW, surfaceH);
         int rw = (camRotDeg % 180 == 0) ? srcW : srcH;
         int rh = (camRotDeg % 180 == 0) ? srcH : srcW;
-        render(progExt, extId, true, 1f / srcW, 1f / srcH, 0f, rw, rh, false);
+        render(progExt, extId, true, 1f / srcW, 1f / srcH, 0f, rw, rh);
         EGL14.eglSwapBuffers(eglDpy, eglSrf);
         framesDrawn++;
         adaptResolution(SystemClock.uptimeMillis() - startMs);
@@ -506,19 +476,6 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         }
     }
 
-    private void drawImage() {
-        if (!programsReady || imgTex < 0 || eglSrf == EGL14.EGL_NO_SURFACE) {
-            return;
-        }
-        if (!EGL14.eglMakeCurrent(eglDpy, eglSrf, eglSrf, eglCtx)) {
-            return;
-        }
-        smooth.approach(target, 1f);
-        ensureFbo(surfaceW, surfaceH);
-        render(prog2d, imgTex, false, 1f / imgW, 1f / imgH, 0f, imgW, imgH, true);
-        EGL14.eglSwapBuffers(eglDpy, eglSrf);
-    }
-
     /**
      * 一趟完整管线：主 shader 渲进 fbo1，第二 pass 渲到当前 target（窗口或 fbo2）。
      *
@@ -527,7 +484,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
      * @param srcAw    摆正后的源宽（算 cover 用）
      */
     private void render(Program main, int tex, boolean external, float texelX, float texelY,
-                        float rot, int srcAw, int srcAh, boolean imageSrc) {
+                        float rot, int srcAw, int srcAh) {
         int outW = (fbo1 >= 0) ? fbW : surfaceW;
         int outH = (fbo1 >= 0) ? fbH : surfaceH;
 
@@ -548,7 +505,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         GLES30.glUniform1i(main.loc("uTex"), 0);
         GLES30.glUniform2f(main.loc("uScale"), sx, sy);
         GLES30.glUniform1f(main.loc("uRot"), rot);
-        GLES30.glUniform1f(main.loc("uFlipY"), imageSrc ? 1f : 0f);
+        GLES30.glUniform1f(main.loc("uFlipY"), 0f);
         GLES30.glUniform1f(main.loc("uAspect"), targetAspect);
         GLES30.glUniform1f(main.loc("uFish"), smooth.fisheye);
         GLES30.glUniform1f(main.loc("uChroma"), smooth.chroma);
@@ -557,7 +514,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         GLES30.glUniform1f(main.loc("uSaturation"), smooth.saturation);
         GLES30.glUniform1f(main.loc("uLocal"), smooth.local);
         GLES30.glUniform2f(main.loc("uTexel"), texelX, texelY);
-        GLES30.glUniformMatrix3fv(main.loc("uSt"), 1, false, imageSrc ? IDENTITY3 : stMat3, 0);
+        GLES30.glUniformMatrix3fv(main.loc("uSt"), 1, false, stMat3, 0);
         drawQuad(main);
 
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0);

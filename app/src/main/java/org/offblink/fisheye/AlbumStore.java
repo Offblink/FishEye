@@ -111,6 +111,19 @@ final class AlbumStore {
         return all.isEmpty() ? null : all.get(0);
     }
 
+    /** 内存里的缩略图缓存：涂抹选中时格子不能闪白，滚动时也不该反复解同一张 */
+    private static final android.util.LruCache<String, Bitmap> THUMBS =
+            new android.util.LruCache<String, Bitmap>(8 * 1024 * 1024) {
+                @Override
+                protected int sizeOf(String key, Bitmap value) {
+                    return value.getByteCount();
+                }
+            };
+
+    static Bitmap cachedThumb(Uri uri, int size) {
+        return THUMBS.get(uri + "@" + size);
+    }
+
     /** 缩略图：先按 1/4 采样解码，再按长边缩到 target */
     static Bitmap thumbnail(ContentResolver cr, Uri uri, int target) {
         try (InputStream in = cr.openInputStream(uri)) {
@@ -133,14 +146,18 @@ final class AlbumStore {
                     return null;
                 }
                 float s = target / (float) Math.max(bmp.getWidth(), bmp.getHeight());
+                Bitmap out;
                 if (s < 1f) {
                     Bitmap small = Bitmap.createScaledBitmap(bmp,
                             Math.max(1, Math.round(bmp.getWidth() * s)),
                             Math.max(1, Math.round(bmp.getHeight() * s)), true);
                     bmp.recycle();
-                    return small;
+                    out = small;
+                } else {
+                    out = bmp;
                 }
-                return bmp;
+                THUMBS.put(uri + "@" + target, out);
+                return out;
             }
         } catch (Throwable t) {
             return null;

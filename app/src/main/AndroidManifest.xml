@@ -34,12 +34,11 @@
             </intent-filter>
         </activity>
 
-        <!-- 调色：读一张照片进来，走同一条管线重调 -->
+        <!-- 预览：相册里点开一张，只看不改 -->
         <activity
-            android:name=".EditorActivity"
+            android:name=".PhotoActivity"
             android:exported="false"
-            android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustResize" />
+            android:screenOrientation="portrait" />
 
         <!-- 相册：只列本应用拍的照片 -->
         <activity

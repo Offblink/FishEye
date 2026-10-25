@@ -59,6 +59,8 @@ public class CameraActivity extends AppCompatActivity {
     private View flash;
     private View permGate;
     private TextView title;
+    private TextView flipLabel;
+    private CameraSelector selector = CameraSelector.DEFAULT_BACK_CAMERA;
     private View thumbWrap;
 
     private ProcessCameraProvider provider;
@@ -97,6 +99,7 @@ public class CameraActivity extends AppCompatActivity {
         flash = findViewById(R.id.cam_flash);
         permGate = findViewById(R.id.cam_perm);
         title = findViewById(R.id.cam_title);
+        flipLabel = findViewById(R.id.cam_flip);
 
         applyInsets();
         setupControls();
@@ -110,6 +113,7 @@ public class CameraActivity extends AppCompatActivity {
 
         // 点击挂在整块上：中间那块白盘会先接到触摸，只给环设监听的话点正中会没反应
         findViewById(R.id.cam_shutter_wrap).setOnClickListener(v -> takePhoto());
+        flipLabel.setOnClickListener(v -> flipCamera());
         // 左下缩略图就是相册入口（不再在右下放第二个「相册」）
         thumbWrap.setOnClickListener(v -> startActivity(new Intent(this, GalleryActivity.class)));
         findViewById(R.id.cam_perm_btn).setOnClickListener(v -> permLauncher.launch(requested()));
@@ -264,20 +268,14 @@ public class CameraActivity extends AppCompatActivity {
                 Ui.toast(this, "相机启动失败：" + e.getClass().getSimpleName());
                 return;
             }
-            Preview viewfinder = new Preview.Builder().build();
-            viewfinder.setSurfaceProvider(preview);
-            imageCapture = new ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                    .setJpegQuality(95)
-                    .build();
-            provider.unbindAll();
-            camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA,
-                    viewfinder, imageCapture);
-            camera.getCameraInfo().getCameraState().observe(this, state -> {
-                if (state.getError() != null) {
-                    Ui.toast(this, "相机错误：" + state.getError().getCode());
+            try {
+                if (!provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+                    flipLabel.setVisibility(View.GONE);
                 }
-            });
+            } catch (androidx.camera.core.CameraInfoUnavailableException e) {
+                flipLabel.setVisibility(View.GONE);
+            }
+            bindCamera();
             // 看门狗：管线出错会自己弹提示，这里兜「相机根本没给画面」那种
             final int before = preview.framesDrawn();
             main.postDelayed(() -> {
@@ -286,6 +284,34 @@ public class CameraActivity extends AppCompatActivity {
                 }
             }, 8000);
         }, ContextCompat.getMainExecutor(this));
+    }
+
+    /** 按当前 selector 重新绑定：翻转镜头走的也是这条路 */
+    private void bindCamera() {
+        if (provider == null) {
+            return;
+        }
+        Preview viewfinder = new Preview.Builder().build();
+        viewfinder.setSurfaceProvider(preview);
+        if (imageCapture == null) {
+            imageCapture = new ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .setJpegQuality(95)
+                    .build();
+        }
+        provider.unbindAll();
+        camera = provider.bindToLifecycle(this, selector, viewfinder, imageCapture);
+    }
+
+    private void flipCamera() {
+        if (capturing || provider == null) {
+            return;
+        }
+        selector = selector == CameraSelector.DEFAULT_BACK_CAMERA
+                ? CameraSelector.DEFAULT_FRONT_CAMERA
+                : CameraSelector.DEFAULT_BACK_CAMERA;
+        bindCamera();
+        preview.setFocus(0.5f, 0.5f);
     }
 
     /** 点取景任意位置：那里对焦测光，同时把缩放模糊的中心挪过去 */
@@ -503,6 +529,7 @@ public class CameraActivity extends AppCompatActivity {
         darkUi = dark;
         int c = dark ? Color.WHITE : Color.BLACK;
         title.setTextColor(c);
+        flipLabel.setTextColor(c);
         Drawable bg = thumbWrap.getBackground();
         if (bg != null) {
             bg.setTint(dark ? 0x66FFFFFF : 0x44000000);

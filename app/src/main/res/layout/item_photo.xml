@@ -10,6 +10,14 @@
         android:layout_height="match_parent"
         android:background="#141516"
         android:contentDescription="@string/app_name"
-        android:scaleType="centerCrop" />
+        android:scaleType="fitCenter" />
+
+    <!-- 选中态：圈 + 压暗，只改这一层的可见性 -->
+    <View
+        android:id="@+id/item_ring"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/select_ring"
+        android:visibility="gone" />
 
 </FrameLayout>

@@ -5,4 +5,5 @@
     <color name="fg_dim">#B3FFFFFF</color>
     <color name="accent">#FF7BE3FF</color>
     <color name="ic_launcher_background">#FF0B0C0E</color>
+    <color name="line">#1FFFFFFF</color>
 </resources>

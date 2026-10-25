@@ -24,7 +24,9 @@ FishEye 把整条管线搬到取景时。面板上六个滑块拖到哪，取景
 | 点 `广角` `冲突` `失控` | 三套预设，越往后越「失控」 |
 | 点取景任意处 | 那里对焦测光，**同时把径向模糊的中心挪过去**（对焦框亮一下） |
 | 按快门 | 渲染后存进 `Pictures/FishEye`，留在取景继续拍（参数不复位） |
-| 点左下缩略图 | 进相册（三列网格）；单击一张进调色，长按删除 |
+| 点左下缩略图 | 进相册（三列网格）；单击看大图（从格子位置放大进入） |
+| 相册里长按 | 进选择模式，按住涂抹＝按一列照片的顺序连选；右上「删除」 |
+| 右下的 `翻转` | 前后摄切换 |
 | 调色页 `保存` | 另存为新照片 / 覆盖原图 |
 
 取景亮度会让界面文字自动反色：底部暗配浅字、底部亮配深字，不在画面上盖任何色块。
@@ -99,8 +101,9 @@ sh ./gradlew assembleDebug        # Windows 的 git-bash；cmd 下用 gradlew.ba
 | `GlPreviewView` | 自己的取景器：EGL + SurfaceTexture + 两趟 shader + 离屏烘焙 + 慢设备降级 |
 | `Shaders` | 全部 GLSL（预览与成片共用同一份） |
 | `Params` | 参数、UI 百分比换算、三套预设、逐帧平滑 |
-| `EditorActivity` | 调色页：读图、走同一条管线、另存/覆盖 |
-| `GalleryActivity` | 相册：`Pictures/FishEye` 三列网格、长按删除 |
+| `PhotoActivity` | 只读大图预览；进出用 Prism 那套缩放切页 |
+| `GalleryActivity` + `PhotoAdapter` | 相册：三列网格、涂抹多选、自绘确认框 |
+| `Ui` | 自绘提示条/确认框/缩放切页，不用任何系统弹窗 |
 | `AlbumStore` | MediaStore 的唯一出入口 |
 | `assets/controls.html` `controls.css` | 滑块面板，拍摄页与调色页共用一套 |
 
