@@ -126,6 +126,7 @@ public class CameraActivity extends AppCompatActivity {
         findViewById(R.id.cam_perm_btn).setOnClickListener(v -> permLauncher.launch(requested()));
 
         preview.setLumaListener(this::onPreviewLuma);
+        preview.setErrorListener(msg -> runOnUiThread(() -> Ui.toast(this, msg)));
         preview.setParams(params);
 
         boolean camGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -283,6 +284,18 @@ public class CameraActivity extends AppCompatActivity {
             provider.unbindAll();
             camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA,
                     viewfinder, imageCapture);
+            camera.getCameraInfo().getCameraState().observe(this, state -> {
+                if (state.getError() != null) {
+                    Ui.toast(this, "相机错误：" + state.getError().getCode());
+                }
+            });
+            // 看门狗：管线出错会自己弹提示，这里兜「相机根本没给画面」那种
+            final int before = preview.framesDrawn();
+            main.postDelayed(() -> {
+                if (!isFinishing() && preview.framesDrawn() == before) {
+                    Ui.toast(this, "取景没有画面：相机可能被其他应用占用");
+                }
+            }, 8000);
         }, ContextCompat.getMainExecutor(this));
     }
 

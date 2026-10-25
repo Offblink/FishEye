@@ -54,6 +54,11 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         void onBaked(Bitmap bitmap);
     }
 
+    /** GL 侧失败时把原因抛给界面：宁可弹一条提示，也不要留一片黑 */
+    public interface ErrorListener {
+        void onGlError(String message);
+    }
+
     private static final float[] QUAD = {
             -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
     };
@@ -68,6 +73,8 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
     private volatile float focusX = 0.5f;
     private volatile float focusY = 0.5f;
     private volatile LumaListener lumaListener;
+    private volatile ErrorListener errorListener;
+    private int framesDrawn;
     private long lastLumaAt;
 
     private EGLDisplay eglDpy = EGL14.EGL_NO_DISPLAY;
@@ -134,6 +141,23 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
 
     public void setLumaListener(LumaListener l) {
         lumaListener = l;
+    }
+
+    public void setErrorListener(ErrorListener l) {
+        errorListener = l;
+    }
+
+    /** 已经画出去的帧数：界面用它判断「相机到底有没有给画面」 */
+    public int framesDrawn() {
+        return framesDrawn;
+    }
+
+    private void fail(String message) {
+        android.util.Log.e("FishEye", message);
+        ErrorListener l = errorListener;
+        if (l != null) {
+            l.onGlError(message);
+        }
     }
 
     /** 缩放模糊的中心点，归一化到 [0,1]（点按对焦时跟着手指走） */
@@ -291,11 +315,13 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
             }
         }
         if (eglCfg == null) {
+            fail("找不到可用的 EGL 配置（设备不支持 OpenGL ES 3）");
             return;
         }
         int[] ctxAttrs = {EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE};
         eglCtx = EGL14.eglCreateContext(eglDpy, eglCfg, EGL14.EGL_NO_CONTEXT, ctxAttrs, 0);
         if (eglCtx == EGL14.EGL_NO_CONTEXT) {
+            fail("EGL 上下文创建失败（错误码 " + EGL14.eglGetError() + "）");
             return;
         }
         glInit = true;
@@ -334,6 +360,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
             prog2d = Program.build(Shaders.VERTEX, Shaders.MAIN_2D);
             progPost = Program.build(Shaders.VERTEX, Shaders.POST);
             if (progExt == null || prog2d == null || progPost == null) {
+                fail("着色器编译失败：" + Program.lastError);
                 return;
             }
             int[] vaoIds = new int[1];
@@ -373,8 +400,12 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
             eglSrf = EGL14.EGL_NO_SURFACE;
         }
         eglSrf = EGL14.eglCreateWindowSurface(eglDpy, eglCfg, surface, new int[]{EGL14.EGL_NONE}, 0);
-        if (eglSrf != EGL14.EGL_NO_SURFACE) {
-            EGL14.eglMakeCurrent(eglDpy, eglSrf, eglSrf, eglCtx);
+        if (eglSrf == EGL14.EGL_NO_SURFACE) {
+            fail("EGL 窗口表面创建失败（错误码 " + EGL14.eglGetError() + "）");
+            return;
+        }
+        if (!EGL14.eglMakeCurrent(eglDpy, eglSrf, eglSrf, eglCtx)) {
+            fail("eglMakeCurrent 失败（错误码 " + EGL14.eglGetError() + "）");
         }
     }
 
@@ -412,6 +443,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
         render(progExt, extId, true, 1f / srcW, 1f / srcH,
                 (float) Math.toRadians(-camRotDeg), rw, rh, false);
         EGL14.eglSwapBuffers(eglDpy, eglSrf);
+        framesDrawn++;
         adaptResolution(SystemClock.uptimeMillis() - startMs);
     }
 
@@ -738,6 +770,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
 
     /** 编译 + 建 uniform 位置表的小包装 */
     static final class Program {
+        static volatile String lastError = "";
         final int id;
         private final Map<String, Integer> locs = new HashMap<>();
         private final Map<String, Integer> attribs = new HashMap<>();
@@ -761,6 +794,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
             GLES30.glDeleteShader(v);
             GLES30.glDeleteShader(f);
             if (ok[0] == 0) {
+                lastError = GLES30.glGetProgramInfoLog(p);
                 GLES30.glDeleteProgram(p);
                 return null;
             }
@@ -792,7 +826,7 @@ public class GlPreviewView extends SurfaceView implements SurfaceHolder.Callback
             int[] ok = new int[1];
             GLES30.glGetShaderiv(s, GLES30.GL_COMPILE_STATUS, ok, 0);
             if (ok[0] == 0) {
-                android.util.Log.e("FishEye", "shader: " + GLES30.glGetShaderInfoLog(s));
+                lastError = GLES30.glGetShaderInfoLog(s);
                 GLES30.glDeleteShader(s);
                 return 0;
             }

@@ -2,7 +2,11 @@ package org.offblink.fisheye;
 
 /**
  * 张力管线的 GLSL 源码。预览（相机外部纹理）与成片（Bitmap 转 2D 纹理）
- * 只差第一行宏，其余逐字相同——这就是「取景即成品」的实现基础。
+ * 只差一个宏和一个采样器，其余逐字相同——这就是「取景即成品」的实现基础。
+ *
+ * <p>注意：{@code #extension} 必须紧跟 {@code #version}，出现在任何声明之前。
+ * 少了这一行，模拟器的 SwiftShader 会睁一只眼闭一只眼，
+ * 但真机（Mali / Adreno）会直接判定 {@code samplerExternalOES} 未声明而编译失败。
  */
 final class Shaders {
 
@@ -17,8 +21,13 @@ final class Shaders {
             + "  gl_Position = vec4(aPos, 0.0, 1.0);\n"
             + "}\n";
 
-    private static final String HEAD = "#version 300 es\n"
-            + "precision highp float;\n"
+    private static final String VERSION = "#version 300 es\n";
+
+    /** 相机外部纹理（OES）必须声明的扩展；一行都不能少，且必须排在所有声明之前 */
+    private static final String EXTERNAL_EXT =
+            "#extension GL_OES_EGL_image_external_essl3 : require\n";
+
+    private static final String HEAD = "precision highp float;\n"
             + "in vec2 vUV;\n"
             + "out vec4 oColor;\n"
             + "uniform vec2  uScale;\n"
@@ -34,7 +43,6 @@ final class Shaders {
             + "uniform vec2  uTexel;\n"
             + "const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);\n";
 
-    /** 采样入口：EXTERNAL 版读相机外部纹理，2D 版读普通纹理 */
     private static final String SAMPLER_EXTERNAL =
             "uniform samplerExternalOES uTex;\n"
             + "vec3 sampleSrc(vec2 uv) { return texture(uTex, uv).rgb; }\n";
@@ -92,11 +100,11 @@ final class Shaders {
             + "  oColor = vec4(clamp(col, 0.0, 1.0), 1.0);\n"
             + "}\n";
 
-    static final String MAIN_EXTERNAL = HEAD + SAMPLER_EXTERNAL + BODY;
-    static final String MAIN_2D = HEAD + SAMPLER_2D + BODY;
+    static final String MAIN_EXTERNAL = VERSION + EXTERNAL_EXT + HEAD + SAMPLER_EXTERNAL + BODY;
+    static final String MAIN_2D = VERSION + HEAD + SAMPLER_2D + BODY;
 
     /** 第二 pass：径向缩放模糊 + 暗角 + 颗粒（需要邻域采样，只能单独一趟） */
-    static final String POST = "#version 300 es\n"
+    static final String POST = VERSION
             + "precision highp float;\n"
             + "in vec2 vUV;\n"
             + "out vec4 oColor;\n"
