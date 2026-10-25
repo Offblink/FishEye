@@ -99,7 +99,23 @@ final class Ui {
         });
         d.findViewById(R.id.dc_cancel).setOnClickListener(v -> d.dismiss());
         d.show();
+        // 宽度必须等 show() 之后再钉死：Floating 对话框的窗口属性在这一步之前
+        // 会被主题重置，MATCH_PARENT 折成 wrap_content，正文就挤成一条窄柱
+        stretch(a, d);
         return d;
+    }
+
+    /** 对话框铺到「屏宽 - 左右各 26dp」，与卡片自身的留白不叠加 */
+    private static void stretch(android.app.Activity a, android.app.Dialog d) {
+        android.view.Window w = d.getWindow();
+        if (w == null) {
+            return;
+        }
+        int dm = a.getResources().getDisplayMetrics().widthPixels;
+        int side = dp(a, 26);
+        int width = Math.max(dp(a, 240), Math.min(dm - side * 2, dp(a, 420)));
+        w.getDecorView().setPadding(0, 0, 0, 0);
+        w.setLayout(width, android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 
     // ------------------------------------------------------------ 缩放切页

@@ -91,6 +91,8 @@ public class CameraActivity extends AppCompatActivity {
     private CameraEffect videoEffect;
     private VideoCapture<Recorder> videoCapture;
     private Recording recording;
+    /** 已请求停止、但 Finalize 还没回来（这期间快门先回到待机样子） */
+    private boolean recordStopping;
     private boolean videoMode;
     private long recordStartedAt;
     private final Runnable recTick = new Runnable() {
@@ -572,7 +574,7 @@ public class CameraActivity extends AppCompatActivity {
         if (videoMode) {
             if (recording == null) {
                 startRecording();
-            } else {
+            } else if (!recordStopping) {
                 stopRecording();
             }
         } else {
@@ -603,6 +605,7 @@ public class CameraActivity extends AppCompatActivity {
         modeVideo.setBackground(on ? getDrawable(R.drawable.mode_on) : null);
         modePhoto.setTextColor(getColor(on ? R.color.fg_dim : R.color.fg));
         modeVideo.setTextColor(getColor(on ? R.color.fg : R.color.fg_dim));
+        applyShutterStyle();
         if (rebind && provider != null && !capturing) {
             bindCamera();
         }
@@ -625,6 +628,7 @@ public class CameraActivity extends AppCompatActivity {
         } else {
             Ui.toast(this, "没有录音权限，这段只录画面");
         }
+        recordStopping = false;
         try {
             recording = pending.start(ContextCompat.getMainExecutor(this), this::onRecordEvent);
         } catch (Throwable t) {
@@ -641,7 +645,7 @@ public class CameraActivity extends AppCompatActivity {
         recBar.setVisibility(View.VISIBLE);
         recBar.setAlpha(0f);
         recBar.animate().alpha(1f).setDuration(160).start();
-        shutterDisc.setBackgroundResource(R.drawable.shutter_rec);
+        applyShutterStyle();
         main.removeCallbacks(recTick);
         main.postDelayed(recTick, 400);
     }
@@ -653,12 +657,14 @@ public class CameraActivity extends AppCompatActivity {
         }
         android.util.Log.d("FishEye", "stop recording: processor frames="
                 + (videoProcessor == null ? -1 : videoProcessor.frames()));
-        // recording 要等 Finalize 回来才置空：中途再点快门不能又开一段
+        // recording 要等 Finalize 回来才置空：中途再点快门不能又开一段；
+        // 但外观要立刻回到「待机」，否则红方块会一直挂到封装结束
+        recordStopping = true;
         try {
             r.stop();
         } catch (Throwable t) {
             recording = null;
-            restoreRecordUi();
+            recordStopping = false;
         }
         restoreRecordUi();
     }
@@ -667,6 +673,7 @@ public class CameraActivity extends AppCompatActivity {
         if (event instanceof VideoRecordEvent.Finalize) {
             VideoRecordEvent.Finalize f = (VideoRecordEvent.Finalize) event;
             recording = null;
+            recordStopping = false;
             restoreRecordUi();
             Uri out = f.getOutputResults().getOutputUri();
             if (f.hasError()) {
@@ -687,7 +694,21 @@ public class CameraActivity extends AppCompatActivity {
         main.removeCallbacks(recTick);
         recBar.animate().alpha(0f).setDuration(160)
                 .withEndAction(() -> recBar.setVisibility(View.GONE)).start();
-        shutterDisc.setBackgroundResource(R.drawable.shutter_disc);
+        applyShutterStyle();
+    }
+
+    /**
+     * 快门中间的圆盘三种样子：
+     * 拍照 = 白盘；录像待机 = 红圆点；录制中 = 红圆角方块（比圆点更小，一眼看出在录）。
+     */
+    private void applyShutterStyle() {
+        int res;
+        if (recording != null && !recordStopping) {
+            res = R.drawable.shutter_rec;
+        } else {
+            res = videoMode ? R.drawable.shutter_dot : R.drawable.shutter_disc;
+        }
+        shutterDisc.setBackgroundResource(res);
     }
 
     /** 按 EXIF 角度把位图转正 */
