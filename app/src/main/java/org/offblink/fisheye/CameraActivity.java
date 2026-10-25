@@ -682,7 +682,11 @@ public class CameraActivity extends AppCompatActivity {
                 if (out != null) {
                     AlbumStore.delete(this, out);
                 }
-                Ui.toast(this, "录像失败（" + f.getError() + "）");
+                // 8 = ERROR_NO_VALID_DATA：相机还没吐帧就超时了（慢设备首次启动常见），
+                // 让用户再点一次比甩一串错误码有用
+                Ui.toast(this, f.getError() == VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA
+                        ? "这段没录到画面（相机还没出帧），再点一次快门"
+                        : "录像失败（" + f.getError() + "）");
             } else {
                 AlbumStore.videoFinalize(this, out);
                 refreshThumb();

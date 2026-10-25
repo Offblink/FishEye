@@ -1,111 +1,118 @@
 # FishEye
 
-给 Android 的极简「张力」相机：**取景时就把画面推成鱼眼、加色散、压影调**，按下快门存下来的就是眼前看到的样子。
+给 Android 的极简「张力」相机：**取景时就把画面推成鱼眼、加色散、压影调**，按下快门存下来的就是眼前看到的样子。录像同理，只是把同一套着色器接到了编码器上。
 
 A minimal Android camera that renders a tension pipeline live in the viewfinder.
 
 <p align="center">
-  <img src="docs/screenshots/camera.jpg" width="230" alt="拍摄页" />
-  <img src="docs/screenshots/editor.jpg" width="230" alt="调色页" />
-  <img src="docs/screenshots/gallery.jpg" width="230" alt="相册" />
+  <img src="docs/screenshots/camera.jpg" width="200" alt="拍摄" />
+  <img src="docs/screenshots/video.jpg" width="200" alt="录像" />
+  <img src="docs/screenshots/gallery.jpg" width="200" alt="相册" />
+  <img src="docs/screenshots/player.jpg" width="200" alt="播放" />
 </p>
 
 ## 它解决哪件事
 
-鱼眼、色散、径向模糊这些东西，传统上都是拍完再进修图软件拧。问题是——**你没法一边拧一边看**：画面一变，你就不确定该往哪儿站、往哪儿压。
+鱼眼、色散、径向模糊传统上都是拍完再修。问题是**你没法一边拧一边看**：画面一变，你就不确定该往哪儿站、该把什么推进画面。
 
-FishEye 把整条管线搬到取景时。面板上六个滑块拖到哪，取景就变成什么样；按快门时，同一张照片用**同一套 GLSL** 在离屏再渲染一遍存盘。预览什么样，存下来就是什么样。
+FishEye 把整条管线搬到取景时。六个滑块拖到哪，取景就是什么样；快门按下时，同一张照片用**同一份 GLSL** 在离屏再渲一遍再存盘。录像也一样——处理器直接插在相机与编码器之间，录下来的帧和取景框里是同一条管线。参数不会因为拍完而复位，可以边拍边调。
 
 ## 怎么用
 
 | 动作 | 结果 |
 | --- | --- |
-| 拖底部滑块 | 实时改当前那一项；六个页签切换要调的项（鱼眼 / 色散 / 对比 / 局部 / 动势 / 暗角） |
+| 拖底部滑块 | 实时改当前那一项；六个页签切换（鱼眼 / 色散 / 对比 / 局部 / 动势 / 暗角） |
 | 点 `广角` `冲突` `失控` | 三套预设，越往后越「失控」 |
-| 点取景任意处 | 那里对焦测光，**同时把径向模糊的中心挪过去**（对焦框亮一下） |
-| 按快门 | 渲染后存进 `Pictures/FishEye`，留在取景继续拍（参数不复位） |
-| 点左下缩略图 | 进相册（三列网格）；单击看大图（从格子位置放大进入） |
-| 相册里长按 | 进选择模式，按住涂抹＝按一列照片的顺序连选；右上「删除」 |
-| 右下的 `翻转` | 前后摄切换 |
-| 调色页 `保存` | 另存为新照片 / 覆盖原图 |
+| 点取景任意处 | 那里对焦测光，**径向模糊的中心跟着挪过去** |
+| 点 `照片 / 视频` | 换拍摄模式；视频模式取景切到 16:9，和录出来的画面一致 |
+| 点快门（照片） | 渲染后存进 `Pictures/FishEye`，留在取景继续拍 |
+| 点快门（视频） | 开始录像，快门变红方块、右上角计时；再点结束，存进 `Movies/FishEye` |
+| 点左下缩略图 | 进相册（从缩略图位置放大进入） |
+| 相册单击 / 长按 | 看照片、放录像 / 进选择模式，按住涂抹＝按序列连选，右上「删除」 |
+| 右下图标 | 前后摄切换 |
 
-取景亮度会让界面文字自动反色：底部暗配浅字、底部亮配深字，不在画面上盖任何色块。
+界面不用系统弹窗和 Toast，提示条、确认框、播放控件都是自绘的；取景亮度变了，文字会自动反色。
 
-## 它怎么做到的
-
-取景不是 `PreviewView` 直出，而是自己接管相机：
+## 管线
 
 ```
-CameraX Preview ──SurfaceTexture(外部纹理)──> GL 线程
-                                              │
-                        pass 1  鱼眼变形 → 色散 → 曝光 → 局部对比 → S 曲线 → 饱和
-                                              │
-                        pass 2  径向缩放模糊 → 暗角 → 颗粒
-                                              │
-                                   eglSwapBuffers → SurfaceView
+相机 ──SurfaceTexture（外部纹理）──> GL 线程
+                                    pass 1  鱼眼 → 色散 → 曝光 → 局部对比 → S 曲线 → 饱和
+                                    pass 2  径向缩放模糊 → 暗角 → 颗粒
+                                      ├─ 取景：eglSwapBuffers → SurfaceView
+                                      ├─ 照片：离屏 FBO → glReadPixels → JPEG
+                                      └─ 录像：SurfaceProcessor → 编码器输入 Surface
 ```
 
-- **预览零 CPU 回读**：全程在显存里过。唯一的回读是每 500ms 取一张 16×16 缩图，只看屏幕下三分之一（控件文字压着的那一带）算亮度，用来反色。
-- **成片走同一条管线**：快门后把 JPEG 解成 Bitmap，交给**同一个** `GlPreviewView` 在离屏 FBO 上跑同样的两趟 shader，再 `glReadPixels` 回 Bitmap 存盘。两边的 GLSL 是同一份字符串。
-- **朝向听设备的**：取景的上下/旋转来自 `SurfaceTexture.getTransformMatrix()`，不再自己算——真机与模拟器的 buffer 约定不同，自己算必翻。成片那侧仍是 CPU 按 EXIF 摆正 + 纯 2D 采样。
-- **方向在 CPU 侧摆正**：EXIF 角度先用 `Matrix` 转到位，GL 只做纯 2D 采样。否则「竖翻 + 旋转」会复合成反射，拍出来左右镜像（这个坑实测踩过）。
-- **参数平滑**：滑块值不直接进 shader，每帧向目标靠 22%，拖过去是「滑」过去的，模糊中心与色散都不跳帧。
-- **鱼眼连续可退化**：`r_src = tan(r·k)/tan(rmax·k)·rmax`，k→0 时退化成线性直出，所以强度从 0 拖到 100 没有跳变点。
-- **失败要说出来**：EGL 配置/上下文/窗口表面建不起来、着色器编译失败、8 秒没有一帧，都会在屏幕上弹一条原因，而不是留一片黑。
-- **慢设备自动降级**：连续 8 帧平均超过 70ms 就把预览缓冲区缩到 0.55×（最多三次），合成器负责放大，画面比例不变；成片不受影响。
+- 取景零 CPU 回读：全程在显存里过。唯一的回读是每 500ms 一张 16×16 缩图，只看控件文字压着的那一带，用来决定界面明暗。
+- 三条通路共用一份实现：`TensionRenderer`（GL 程序与两趟渲染）+ `Shaders`（GLSL 源码字符串）。
+- 朝向听设备的：`SurfaceTexture.getTransformMatrix()` × CameraX 的 `updateTransformMatrix`，不自己推 sensor 角度；照片是 CPU 按 EXIF 摆正后做纯 2D 采样。
+- 参数逐帧平滑（每帧向目标靠 22%），拖滑块是「滑」过去的，模糊中心和色散都不跳。
+- 鱼眼连续可退化：`r_src = tan(r·k)/tan(rmax·k)·rmax`，k→0 退化成线性，强度从 0 拖到 100 没有跳变点。
+- 出错要说出来：EGL、着色器编译、8 秒没有一帧，都会在屏幕上给原因，不留黑屏。
+- 慢设备自动降级：连续 8 帧平均超过 70ms，就把预览缓冲缩到 0.55×（最多三次），画面比例不变。
+
+### 录像怎么接的
+
+`CameraEffect` 只挂 `VIDEO_CAPTURE`，取景那条链路一行没动。`VideoProcessor` 是个 `SurfaceProcessor`，自己开一个 EGL 上下文，把同一套两趟着色器渲进 `Recorder` 的输入 Surface；声音与封装交给 CameraX。
 
 ## 构建
 
-需要 JDK 17+ 和 Android SDK（`compileSdk 37`）。
+需要 JDK 17+ 与 Android SDK（compileSdk 37，minSdk 26）。
 
 ```bash
-git clone <repo>
+git clone https://github.com/Offblink/FishEye.git
 cd FishEye
 sh ./gradlew assembleDebug        # Windows 的 git-bash；cmd 下用 gradlew.bat
 ```
 
 产物在 `app/build/outputs/apk/debug/app-debug.apk`。
 
-> 本机在墙内，`gradle.properties` 里带了 Clash（127.0.0.1:7897）的代理设置；换机器或关代理时删掉那四行 `systemProp.*`。
-
-## 实测结论
-
-在 `Small_Phone`（x86_64，720×1280，API 37，SwiftShader 软件渲染）上验过：
-
-- 取景实时出画，鱼眼 / 色散 / 暗角 / 颗粒全部生效；软件渲染下约 2–3 fps，自适应降级后明显变顺。
-- 快门 → `Pictures/FishEye` 出 960×1280 JPEG，方向正确、不镜像，取景里看到的调色与成片一致。
-- 相册能列出、能进调色页；调色页另存会在相册里多出一张。
-- 取景反色：底部亮度越阈值时界面文字切深色，回落时切回浅色。
-
-真机（有真 GPU 的机器）未验。
+> `gradle.properties` 里带了 Clash（127.0.0.1:7897）的四行代理设置，换机器或不用代理时删掉。
 
 ## 权限
 
 | 权限 | 用途 |
 | --- | --- |
-| `CAMERA` | 取景与拍照 |
-| `READ_MEDIA_IMAGES`（Android 13+）<br>`READ_EXTERNAL_STORAGE`（Android 12 及以下） | 相册列表与缩略图 |
-| `WRITE_EXTERNAL_STORAGE`（Android 9 及以下） | 老系统写入 `Pictures/FishEye` |
+| `CAMERA` | 取景、拍照、录像 |
+| `RECORD_AUDIO` | 录像带声音；拒绝时自动降级为无声录像 |
+| `READ_MEDIA_IMAGES` / `READ_MEDIA_VIDEO`（Android 13+）<br>`READ_EXTERNAL_STORAGE`（Android 12 及以下） | 相册列表与缩略图 |
+| `WRITE_EXTERNAL_STORAGE`（Android 9 及以下） | 老系统写入相册目录 |
+
+## 验证到哪一步
+
+在模拟器（x86_64 / 720×1280 / API 37 / SwiftShader 软件渲染）上跑通：
+
+- 取景实时出画，鱼眼、色散、暗角、颗粒全部生效；软件渲染下约 2–3 fps，降级后顺畅。
+- 快门 → `Pictures/FishEye` 出 JPEG，方向正确、不镜像，取景里的调色与成片一致。
+- 录像 → `Movies/FishEye` 出 720×1280 H.264，帧里带着同一条管线，有音轨。
+- 相册照片与录像混列（录像带时长角标）、涂抹多选、自绘删除确认、缩放切页。
+- 内置播放器：播放/暂停、拖进度条即时显示对应位置的帧。
+
+真机还没验：录像质量档与「预览 + 拍照 + 录像」三路并发能力、AAC 音画对齐、前摄镜像。
 
 ## 它做不到的
 
-- 只有后摄；没有前摄、闪光灯、变焦——刻意做窄。
-- 照片只进 `Pictures/FishEye`。
-- 成片先解码再重新编码，所以是「一次 JPEG 往返」；要无损得改成 GL 直出捕获。
+- 没有闪光灯、变焦、手动曝光；录像质量档跟着设备能力走。
+- 成片是「一次 JPEG 往返」（解码 → 重新渲染 → 编码），不是无损。
+- 播放器只放本应用拍的片子。
 
 ## 代码结构
 
 | 文件 | 职责 |
 | --- | --- |
-| `CameraActivity` | 取景、实时管线、快门、缩略图、明暗自适应主题 |
-| `GlPreviewView` | 自己的取景器：EGL + SurfaceTexture + 两趟 shader + 离屏烘焙 + 慢设备降级 |
-| `Shaders` | 全部 GLSL（预览与成片共用同一份） |
+| `CameraActivity` | 取景页：权限、相机绑定、快门 / 录像、明暗自适应主题、前后摄切换 |
+| `GlPreviewView` | 取景器：EGL + SurfaceTexture + 两趟着色器 + 离屏烘焙 + 慢设备降级 |
+| `TensionRenderer` | 管线本体：程序、四边形、中间 FBO，取景 / 录像 / 烘焙共用 |
+| `Shaders` | 全部 GLSL（三条通路同一份） |
 | `Params` | 参数、UI 百分比换算、三套预设、逐帧平滑 |
-| `PhotoActivity` | 只读大图预览；进出用 Prism 那套缩放切页 |
-| `GalleryActivity` + `PhotoAdapter` | 相册：三列网格、涂抹多选、自绘确认框 |
-| `Ui` | 自绘提示条/确认框/缩放切页，不用任何系统弹窗 |
-| `AlbumStore` | MediaStore 的唯一出入口 |
-| `assets/controls.html` `controls.css` | 滑块面板，拍摄页与调色页共用一套 |
+| `VideoProcessor` | 录像支路：`SurfaceProcessor` + 独立 EGL 上下文 |
+| `VideoActivity` + `ScrubBar` + `PlayPauseView` | 自绘播放器：进度条、播放键、拖动即时出帧 |
+| `PhotoActivity` | 只读大图预览，进出用缩放切页 |
+| `GalleryActivity` + `PhotoAdapter` | 相册：三列网格、涂抹多选、录像角标 |
+| `Ui` | 自绘提示条、确认框、缩放切页 |
+| `AlbumStore` | MediaStore 的唯一出入口（照片 + 录像） |
+| `assets/controls.html` `controls.css` | 滑块面板 |
 
 ## 许可
 
